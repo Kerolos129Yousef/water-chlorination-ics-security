@@ -1,0 +1,6 @@
+{
+  "threshold": 9.269035945180804e-05,
+  "percentile": 99,
+  "metric": "tranad_score",
+  "window": 30
+}
