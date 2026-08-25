@@ -1,0 +1,47 @@
+# Runtime dependencies for the TranAD SWaT inference library (ml/src).
+#
+# Install (CPU-only torch, ~200 MB instead of the ~2.5 GB CUDA default):
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu \
+#                         --extra-index-url https://pypi.org/simple \
+#                         -r ml/requirements.txt
+#
+# Version rationale — see docs/provenance/tranad_swat_provenance.md section 4.
+
+# DOCUMENTED PIN. Both scaler.joblib and minmax_scaler.joblib embed
+# _sklearn_version = "1.7.2". Unpickling under a different minor version emits
+# InconsistentVersionWarning and is not guaranteed to reconstruct the estimators
+# faithfully, so this is pinned exactly rather than to a range.
+scikit-learn==1.7.2
+
+# DOCUMENTED CONSTRAINT. Both joblibs reference `numpy._core.multiarray`, a module
+# that does not exist in numpy 1.x — loading them under numpy < 2 raises
+# ModuleNotFoundError. Pinned exactly (not >=2.0) so the golden vectors stay
+# reproducible; 2.2.6 is the newest cp310 wheel.
+numpy==2.2.6
+
+# NOT DOCUMENTED BY THE RESEARCH — chosen here, and this is the reasoning.
+#
+# The torch version used for training was never recorded; model.pt only reveals
+# serialization format v3 (torch >= 1.6). 2.9.1 was selected because:
+#
+#   1. It is a current stable release with a cp310 wheel (the research notebook
+#      targeted Python 3, and this repo runs 3.10).
+#   2. torch >= 2.6 defaults `torch.load` to weights_only=True, matching the
+#      loader's explicit weights_only=True. No pickle-execution surface.
+#   3. The architecture uses batch_first=False, which disables the fused
+#      TransformerEncoderLayer fast path. That removes the main source of
+#      version-to-version numerical variation in this model. torch emits a
+#      UserWarning saying the fast path is unavailable — expected, and required:
+#      switching to batch_first=True would change numerics.
+#
+# Pinned exactly because the golden-vector fixtures were generated under it.
+# Upgrading is allowed but must be treated as a change requiring verification:
+# run the golden tests, and if scores shift beyond rtol=1e-6, regenerate the
+# fixtures and record the new version rather than loosening the tolerance.
+torch==2.9.1
+
+# Transitive but load-bearing: joblib deserialises both scaler artifacts. Left
+# unpinned so pip resolves the version scikit-learn 1.7.2 requires (>=1.2.0).
+joblib

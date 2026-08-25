@@ -1,0 +1,15 @@
+# Test-only dependencies for the TranAD inference library.
+#
+#   .venv/bin/pip install -r ml/requirements-dev.txt
+#
+# Kept separate from ml/requirements.txt so a deployment image does not pull the
+# test toolchain.
+
+-r requirements.txt
+
+# NOT DOCUMENTED BY THE RESEARCH — chosen here. The research phase had no test
+# suite, so there is no version to inherit. 8.4.2 is a current stable release;
+# the suite uses only long-standing pytest APIs (fixtures, parametrize, raises,
+# approx, monkeypatch), so this pin is a reproducibility convenience rather than
+# a compatibility requirement.
+pytest==8.4.2

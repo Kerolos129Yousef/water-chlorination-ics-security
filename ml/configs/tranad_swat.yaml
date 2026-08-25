@@ -1,0 +1,178 @@
+# TranAD / SWaT — confirmed model + preprocessing contract for the MVP inference pipeline.
+#
+# Every value here was verified byte-for-byte against ml/artifacts/swat_TranAD/ and
+# reproduced from the raw SWaT CSVs (full parity, 2026-08-21). Nothing is guessed.
+# See docs/provenance/tranad_swat_provenance.md for the verification record.
+#
+# The artifacts are the source of truth. This file records what they ALREADY encode so
+# production code does not have to re-derive it from the research notebook. If a value
+# here disagrees with an artifact, the artifact wins and this file is the bug.
+
+schema_version: 1
+
+model:
+  name: TranAD
+  dataset: SWaT
+  # Constructor args. model.pt stores weights only — no hyperparameters — so these are
+  # mandatory to rebuild the module before load_state_dict(). Recovered from tensor shapes:
+  #   pos_encoder.pe (30,1,90) -> window=30, d_model=2*feats=90
+  #   fcn.0.weight   (45,90)   -> feats=45
+  #   *.linear1.weight (16,90) -> dim_feedforward=16
+  feats: 45
+  window: 30
+  n_heads: 45              # notebook: nhead=feats
+  d_model: 90              # 2 * feats (TranAD concatenates input with the focus score)
+  dim_feedforward: 16
+  dropout: 0.1
+  num_encoder_layers: 1
+  num_decoder_layers: 1    # per decoder; there are two decoders sharing one `fcn`
+  total_parameters: 180993
+
+  # Reference implementation: research/notebooks/swat/SWaT_Anomaly_Detection.ipynb, cell 15.
+  # Copy the TranAD and PositionalEncoding classes VERBATIM. state_dict keys bind to exact
+  # attribute names (pos_encoder, transformer_encoder, transformer_decoder1/2, fcn);
+  # renaming any attribute breaks load_state_dict(strict=True).
+  load:
+    strict: true
+    weights_only: true     # model.pt is a plain OrderedDict of tensors; safe to load this way
+    eval_mode: true        # dropout=0.1 must be inactive for deterministic scoring
+
+preprocessing:
+  # Order is load-bearing. Each step's output is the next step's input.
+  #   1. select + order columns per feature_names.json
+  #   2. StandardScaler  (scaler.joblib)
+  #   3. window (30, stride 1)
+  #   4. flatten C-order -> (n, 1350)
+  #   5. MinMaxScaler    (minmax_scaler.joblib)
+  #   6. reshape back    -> (n, 30, 45)
+  feature_names_file: feature_names.json   # 45 names, ORDERED — reorder inputs to match
+  n_features: 45
+
+  window: 30
+  stride: 1
+
+  # SWaT is 1 Hz and the research pipeline kept every 5th row (X.iloc[::5]).
+  # Consequences for the live pipeline:
+  #   - ingest cadence = 1 sample / 5 s
+  #   - one window     = 30 * 5 = 150 s of wall-clock
+  #   - 150 s is the buffer fill time and the floor on detection latency
+  subsample: 5
+  source_rate_hz: 1
+  effective_sample_period_s: 5
+  window_span_s: 150
+
+  scaling:
+    standard_scaler:
+      file: scaler.joblib
+      applied_to: per-feature, on raw rows, BEFORE windowing
+      n_features_in: 45
+      n_samples_seen: 221936
+      dtype: float64
+      # P204 and P206 have var_ = 0.0 -> sklearn sets scale_ = 1.0, so z = x - mean_.
+      # These two pass through essentially unscaled. See the caveat in the provenance doc.
+      zero_variance_features: [P204, P206]
+
+    minmax_scaler:
+      file: minmax_scaler.joblib
+      applied_to: flattened windows, AFTER windowing
+      n_features_in: 1350          # 30 timesteps * 45 features
+      n_samples_seen: 221907       # training windows
+      dtype: float32
+      feature_range: [0, 1]
+
+      # CRITICAL: flatten row-major / timestep-major, i.e. index = t * 45 + f.
+      # Verified: under C-order all 30 window positions carry identical min/max per feature
+      # (spread exactly 0.0 for 45/45 features); under the transposed layout the spread is 18.3.
+      # Getting this wrong scales all 1350 columns by the wrong statistics, raises NO error,
+      # and silently produces meaningless scores. Must be covered by a regression test.
+      flatten_order: C
+
+      # Do NOT collapse this to 45 per-feature min/max. It is mathematically equivalent
+      # (all 30 positions share bounds) but keeping the 1350-column artifact preserves
+      # bit-exactness with the research run.
+      collapse_to_per_feature: false
+
+      # Do NOT add clipping. clip=False is load-bearing: attack windows scale outside [0,1],
+      # which is what drives reconstruction error up through the Sigmoid-terminated `fcn`.
+      # Clipping would suppress the detection signal.
+      clip: false
+
+scoring:
+  # TranAD reconstructs only the LAST timestep of each window.
+  #   src  = window.permute(1, 0, 2)      # (30, B, 45)
+  #   elem = src[-1:, :, :]               # (1, B, 45)
+  #   x1, x2 = model(src, elem)
+  #   score = 0.5*mean((x1-elem)^2) + 0.5*mean((x2-elem)^2)   # mean over feature dim
+  metric: tranad_score
+  formula: "0.5 * MSE(x1, elem) + 0.5 * MSE(x2, elem), averaged over the 45 features"
+  reconstruct_target: last_timestep
+
+  # Because only the last timestep is reconstructed, taking the squared error BEFORE the
+  # feature-dim mean yields a 45-length per-feature error vector: which sensors drove the
+  # alert. Free, no model change, and the direct evidence for the project's
+  # "process-aware detection" claim. Expose it alongside the scalar score.
+  expose_per_feature_error: true
+
+threshold:
+  file: threshold.json
+  value: 9.269035945180804e-05
+  metric: tranad_score
+  window: 30
+
+  # Provenance: np.percentile(scores_val, 99) where scores_val are TranAD scores on the
+  # NORMAL-VALIDATION split (notebook cell 13, `thr_fixed`). It is NOT the notebook's
+  # best-F1 threshold, which was searched on the test set and is unusable in production.
+  selection: fixed_percentile_of_normal_validation_scores
+  percentile: 99
+
+  # The notebook metric that pairs with THIS threshold is `F1_fixed`, not the headline `F1`.
+  expected_performance:
+    f1_fixed_point_adjusted: 0.7934
+    roc_auc: 0.9759
+    pr_auc: 0.8216
+    # Do not publish the notebook's F1=0.9999. It comes from a test-set-searched threshold;
+    # the notebook itself warns that column "can read ~1.0 even for a broken model".
+    headline_f1_do_not_report: 0.9999
+    point_wise_f1: null        # UNMEASURED. All figures above are point-adjusted.
+
+  # KNOWN CALIBRATION CAVEAT — see docs/provenance/tranad_swat_provenance.md §5.
+  # Six of the 45 model features are frozen constants across 100% of the validation split
+  # this threshold was computed on. Expect the real false-positive rate to exceed the
+  # nominal 1%. Not yet recalibrated, by decision. Do not modify threshold.json.
+  calibration_caveat: true
+  calibration_caveat_ref: docs/provenance/tranad_swat_provenance.md#5-threshold-calibration-caveat
+
+  # Severity banding is an ENGINEERING ADDITION with no basis in the research. The model
+  # emits one score and one threshold; there is no validated multi-level severity mapping.
+  # Whatever bands the alert engine uses must be labelled as a heuristic, not model output.
+  severity_bands_are_research_validated: false
+
+# Recorded so a mismatch is caught at load time, not by silently different numbers.
+artifacts:
+  dir: ml/artifacts/swat_TranAD
+  immutable: true
+  sha256:
+    feature_names.json:   921d7a46c962438a3e981ed05e41f3e497de15fdde2db3ced39de4746330ee54
+    minmax_scaler.joblib: e1740fc1c8e57cd1f646c89fa09340fd83e5c48b10c41e6d58da286621499e82
+    model.pt:             48b742a8751f434c3ae12367fd0515a67fe3397b835c735c709171a5eecf344e
+    scaler.joblib:        61fbd8acaf1f0d49e17831329d96a2a35fcb7bdcd40610d4ffdc7f81947e28a1
+    threshold.json:       6415635acde642f70d1a4f260d1802a0740522d10054332dbc3951cc8382e662
+
+environment:
+  # These are the CONSTRAINTS the artifacts themselves impose. The exact versions actually
+  # installed are pinned in ml/requirements.txt, which is narrower on purpose (exact pins
+  # keep the golden vectors reproducible). A constraint here is a hard requirement; a pin
+  # there is a reproducibility choice.
+  #
+  # scikit-learn 1.7.2 is embedded in both joblib files (_sklearn_version).
+  # The joblibs reference `numpy._core.multiarray`, which does not exist in numpy 1.x —
+  # loading them under numpy < 2 raises ModuleNotFoundError.
+  scikit_learn: "==1.7.2"
+  numpy: ">=2.0"
+  # model.pt uses torch serialization format v3 (little-endian). The exact torch version
+  # used for training was NOT recorded, so 2.9.1 was chosen here, not inherited — see the
+  # reasoning in ml/requirements.txt. The golden vectors were generated under it and lock
+  # it in place. Upgrading is allowed but must re-run the golden-vector parity test; if
+  # scores shift beyond rtol=1e-6, regenerate the fixtures and record the new version
+  # rather than loosening the tolerance.
+  torch: "==2.9.1"
