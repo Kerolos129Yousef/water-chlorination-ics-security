@@ -131,6 +131,47 @@ The focus is now **software integration and system engineering**, not model sele
 
 ---
 
+# Implementation Status
+
+Current status of the integration/productionization work (as of the latest
+closure). This records what is actually built and tested in the repository.
+
+| Phase | Scope | Status |
+|---|---|---|
+| Phase 0 | Foundation / provenance (verified TranAD/SWaT artifact contract, pinned environment) | **COMPLETE** |
+| Phase 1 | TranAD production inference library (`ml/src`) + golden-vector tests | **COMPLETE** |
+| Phase 1.5 | Threshold-honesty evaluation, measured detection metrics + provenance | **COMPLETE** |
+| Phase 2A | SWaT replay + rolling window (`simulator/`) | **COMPLETE** |
+| Phase 2B | FastAPI backend (`backend/`) — thin API over the stateless detector | **COMPLETE** |
+
+**Actual implementation order:** Phase 2A (SWaT replay + rolling window) was
+built **before** Phase 2B (FastAPI backend). This differs from the numbered
+progression sketched under *Development Strategy* (which listed the backend
+before telemetry replay); the replay + rolling-window layer was implemented
+first so the backend could be designed as a thin, stateless API with the
+30-sample buffering owned entirely by the caller (`RollingWindow`).
+
+**Key architecture decisions in force:**
+
+* TranAD is the actual MVP detection model; the five artifacts under
+  `ml/artifacts/swat_TranAD/` are treated as immutable / byte-identical.
+* `TranADDetector` is **stateless** and requires exactly a `30 × 45` input.
+* The rolling 30-sample buffer is owned by `simulator.window_buffer.RollingWindow`,
+  **not** by FastAPI. The backend keeps no per-request/streaming state.
+* The FastAPI layer is a **thin** boundary over `ml/src` (validate → delegate →
+  shape response); dependency direction is strictly `backend → ml.src`.
+* **Threshold recalibration: DEFERRED.** The current `threshold.json` (99th
+  percentile) is used as-is; the known FPR caveat is surfaced, not silently
+  corrected.
+
+Full test suite: **238 tests passing** (`pytest -q`), including 22 backend API
+cases.
+
+Not started (explicitly out of scope for this phase): Phase 3+ — alert engine,
+monitoring dashboard, Docker, AWS, Terraform, Kubernetes, CI/CD.
+
+---
+
 # MVP Architecture
 
 The target MVP flow is:

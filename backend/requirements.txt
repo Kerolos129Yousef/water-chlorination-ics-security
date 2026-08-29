@@ -1,0 +1,12 @@
+# Backend (Phase 2B) dependencies.
+#
+# Kept separate from ml/requirements.txt on purpose: the ML package
+# (ml/src) must stay usable without FastAPI installed. The dependency
+# direction is backend -> ml.src, never the reverse.
+#
+# Runtime:
+fastapi==0.141.1
+uvicorn[standard]>=0.30        # ASGI server:  uvicorn backend.app:app
+
+# Test-only (fastapi.testclient.TestClient is built on httpx):
+httpx==0.28.1
