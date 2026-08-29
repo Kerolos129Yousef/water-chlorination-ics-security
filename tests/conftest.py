@@ -34,6 +34,29 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "filterwarnings", "ignore:enable_nested_tensor is True:UserWarning"
     )
+    # Tests that need the licensed SWaT CSVs, which are not in version control.
+    # Everything else must pass without them; that property is load-bearing.
+    config.addinivalue_line(
+        "markers", "dataset: requires the local SWaT dataset (skipped if absent)"
+    )
+
+
+@pytest.fixture(scope="session")
+def swat_dataset_dir() -> Path:
+    """The local SWaT CSV directory, or skip the test.
+
+    Honours ``$SWAT_DATASET_DIR``. The dataset is licensed from iTrust, SUTD and
+    excluded from version control, so these tests are opportunistic.
+    """
+    from ml.src.dataset import default_dataset_dir
+
+    d = default_dataset_dir()
+    if not (d / "attack.csv").is_file() or not (d / "normal.csv").is_file():
+        pytest.skip(
+            f"SWaT dataset not found at {d}; set SWAT_DATASET_DIR to enable "
+            f"dataset-gated tests"
+        )
+    return d
 
 
 @pytest.fixture(scope="session")

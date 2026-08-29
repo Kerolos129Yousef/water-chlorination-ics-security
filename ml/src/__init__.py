@@ -14,7 +14,25 @@ see :data:`detector.THRESHOLD_CAVEAT`.
 
 from __future__ import annotations
 
+from .dataset import (
+    DatasetError,
+    SWaTSeries,
+    attack_segments,
+    default_dataset_dir,
+    load_attack_v0,
+    load_research_concat,
+    sliding_windows,
+)
 from .detector import THRESHOLD_CAVEAT, DetectionResult, TranADDetector
+from .metrics import (
+    MetricResult,
+    point_adjust,
+    precision_recall_f1,
+    score_metrics,
+    threshold_free_metrics,
+    window_labels_any,
+    window_labels_last,
+)
 from .model import PositionalEncoding, TranAD, load_tranad
 from .preprocessing import PreprocessingError, TranADPreprocessor
 from .scoring import (
@@ -25,6 +43,7 @@ from .scoring import (
 )
 
 __all__ = [
+    # inference
     "TranADDetector",
     "DetectionResult",
     "THRESHOLD_CAVEAT",
@@ -37,4 +56,20 @@ __all__ = [
     "anomaly_scores",
     "per_feature_errors",
     "score_windows",
+    # dataset
+    "SWaTSeries",
+    "DatasetError",
+    "load_attack_v0",
+    "load_research_concat",
+    "attack_segments",
+    "sliding_windows",
+    "default_dataset_dir",
+    # metrics
+    "MetricResult",
+    "point_adjust",
+    "window_labels_any",
+    "window_labels_last",
+    "precision_recall_f1",
+    "score_metrics",
+    "threshold_free_metrics",
 ]

@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Iterator, Mapping, Sequence
 
 import joblib
 import numpy as np
@@ -251,3 +251,86 @@ class TranADPreprocessor:
                 f"got {ordered.shape[0]}"
             )
         return self.transform(ordered)
+
+    def transform_series(
+        self, rows: np.ndarray, chunk: int = 4096
+    ) -> Iterator[np.ndarray]:
+        """Stream overlapping windows from a continuous series of raw rows.
+
+        Yields ``(k, 30, 45)`` float32 batches covering every stride-1 window of
+        ``rows``, in order, where ``k <= chunk``. For ``n`` rows that is
+        ``n - 29`` windows total.
+
+        Equivalent to calling :meth:`transform` on each window separately, and
+        **bit-identically so** -- not merely close. StandardScaler is affine and
+        per-feature, so scaling before windowing produces the same float64 values
+        as scaling after; the float32 cast and MinMax step then see identical
+        inputs either way. A dedicated test asserts this against the golden
+        windows, because a silent divergence here would corrupt every offline
+        metric while leaving the online path correct.
+
+        Two reasons this exists rather than looping :meth:`transform`:
+
+        * **Work.** Stride-1 windows overlap 29/30, so per-window scaling
+          standardises every row 30 times. Scaling once is what the research
+          pipeline did (``make_splits`` scaled, then ``make_windows`` windowed).
+        * **Memory.** Materialising all 89,955 clean-Attack_v0 windows as float32
+          is 486 MB, and the flat MinMax stage needs as much again. Chunking
+          bounds both to ~22 MB at the default.
+
+        Input is validated *before* any batch is produced, so a bad call raises
+        here rather than on first iteration.
+
+        Parameters
+        ----------
+        rows:
+            ``(n, 45)`` raw telemetry in ``feature_names`` order, ``n >= 30``.
+            Validated for finiteness like :meth:`transform` -- a stuck or absent
+            channel is an operational fault, not something to impute.
+        """
+        arr = np.asarray(rows)
+        if arr.ndim != 2 or arr.shape[1] != self.n_features:
+            raise PreprocessingError(
+                f"expected a (n_samples, {self.n_features}) array, got shape "
+                f"{arr.shape}"
+            )
+        if len(arr) < self.window:
+            raise PreprocessingError(
+                f"need at least {self.window} rows to form one window, "
+                f"got {len(arr)}"
+            )
+        if chunk < 1:
+            raise PreprocessingError(f"chunk must be >= 1, got {chunk}")
+
+        arr = arr.astype(np.float64, copy=False)
+        if not np.isfinite(arr).all():
+            bad = np.argwhere(~np.isfinite(arr))
+            first = bad[0]
+            name = self.feature_names[first[-1]]
+            raise PreprocessingError(
+                f"non-finite value at row={first[0]} feature={name!r} "
+                f"({len(bad)} total). This module does not impute: a stuck or "
+                f"missing channel is an operational fault. See provenance doc §5.2."
+            )
+
+        return self._iter_series(arr, chunk)
+
+    def _iter_series(self, arr: np.ndarray, chunk: int) -> Iterator[np.ndarray]:
+        # Scale once, in float64, then window. The float32 cast stays *after*
+        # windowing to match transform() exactly -- see the _FLOAT32 note.
+        scaled = self._artifacts.standard_scaler.transform(arr)
+        windows = np.lib.stride_tricks.sliding_window_view(
+            scaled, window_shape=self.window, axis=0
+        ).transpose(0, 2, 1)
+
+        for start in range(0, len(windows), chunk):
+            block = np.ascontiguousarray(
+                windows[start : start + chunk], dtype=_FLOAT32
+            )
+            k = len(block)
+            flat = self._artifacts.minmax_scaler.transform(
+                block.reshape(k, self.flat_dim)
+            )
+            yield np.ascontiguousarray(
+                flat.reshape(k, self.window, self.n_features), dtype=_FLOAT32
+            )

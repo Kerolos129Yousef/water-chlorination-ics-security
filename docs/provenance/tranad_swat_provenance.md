@@ -238,6 +238,41 @@ populated) is a **deferred follow-up requiring explicit approval** — it would 
 sibling artifact, never modify the existing one, and would not involve retraining. Any
 figure published from the current threshold must carry the §5.3 caveat.
 
+### 5.6 Constant features: the training split and the clean slice answer different questions
+
+A regression test (`tests/test_dataset.py::test_constant_features_are_reported`)
+originally assumed the clean Attack_v0 slice's constant features would be a subset
+of the scaler-frozen set `{P204, P206}`. They are not. Measured over the clean
+slice, the **only** single-valued feature is **`P301`** (constant `1.0`). This was
+verified independently of the loader by scanning the raw CSVs directly:
+
+| Feature | `attack.csv` (54,621 rows) | `normal.csv` rows 1..395,298 | clean Attack_v0 (both, attacks incl.) | `scaler.joblib` `var_` (training) |
+|---|---|---|---|---|
+| `P301` | `1.0` only | `1.0` only | **constant `1.0`** | `0.00337` (mean `1.0034`) — **not frozen** |
+| `P204` | `{1.0, 2.0}` | `1.0` only | varies (`2.0` under attack) | `0.0` — **frozen** |
+| `P206` | `{1.0, 2.0}` | `1.0` only | varies (`2.0` under attack) | `0.0` — **frozen** |
+
+Two different distributions, two different answers:
+
+- **`scaler.joblib` froze `{P204, P206}`.** It was fit on the normal-only training
+  split of the *research concat*, which includes the block-2 duplicate. There P204
+  is empty→ffilled to a constant (the §5.2 gap) and P206 is genuinely constant in
+  normal operation. This matches `test_p204_p206_have_zero_variance_in_training`.
+- **The clean slice's only constant is `P301`.** P204 and P206 are constant only in
+  *normal* operation; both actuate to `2.0` during attacks, and the clean slice
+  contains attacks, so they vary. P301 is `1.0` across every row of both source
+  files in the 2015-12-28 → 2016-01-02 range this slice covers; the scaler did not
+  freeze it because it *does* reach `2.0` elsewhere in the fuller normal record.
+
+This is a **data-characterization finding, category (B/C)** — an incomplete test
+assumption over a genuinely different distribution. It is **not** a reconstruction
+defect: the reconstruction faithfully reproduces the raw rows. It touches no
+artifact, the scalers, the model, or the threshold. The regression test now asserts
+the measured set exactly (`== {"P301"}`), which is a stronger guard than the
+original subset check. It also resolves the §5.3 open question for P204: the loader
+confirms P204 is not a physical constant (it varies under attack), so its
+training-time zero variance was the block-2 gap.
+
 ---
 
 ## 6. Replay dataset for the demo

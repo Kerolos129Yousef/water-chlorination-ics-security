@@ -225,7 +225,6 @@ def test_float32_cast_position_matters(
 
 
 # --------------------------------------------------- P204 / P206 documented hazard
-
 def test_p204_p206_have_zero_variance_in_training(standard_scaler, feature_names):
     """Provenance section 5.3: P204's zero variance is a data-gap artifact, not physics."""
     for name in ("P204", "P206"):
@@ -255,3 +254,104 @@ def test_p204_p206_pass_through_unbounded(preprocessor, normal_window, feature_n
         out = preprocessor.transform(w)[0, :, j]
         np.testing.assert_allclose(out, np.full(WINDOW, 6.0, dtype=np.float32), rtol=0, atol=1e-6)
         assert out.max() > 1.0, "value escapes [0, 1] with no clipping"
+
+
+# ------------------------------------------------------------- transform_series
+#
+# The offline path scales the whole series once and then windows it; the online
+# path scales each window. They MUST agree bit-for-bit or every offline metric is
+# computed on different numbers than the live detector produces -- a divergence
+# that would raise nothing and invalidate the measured F1 silently.
+
+
+def _series_windows(preprocessor, rows, chunk=4096):
+    return np.concatenate(list(preprocessor.transform_series(rows, chunk=chunk)))
+
+
+def test_transform_series_is_bit_identical_to_transform(preprocessor, normal_window):
+    """A 30-row series is exactly one window; both paths must match exactly."""
+    np.testing.assert_array_equal(
+        _series_windows(preprocessor, normal_window),
+        preprocessor.transform(normal_window),
+    )
+
+
+def test_transform_series_matches_transform_window_by_window(
+    preprocessor, normal_window, attack_window
+):
+    """Overlapping windows over a real 60-row series, each checked individually."""
+    rows = np.vstack([normal_window, attack_window])          # (60, 45)
+    streamed = _series_windows(preprocessor, rows)
+    assert streamed.shape == (len(rows) - WINDOW + 1, WINDOW, N_FEATURES)
+    for i in range(len(streamed)):
+        np.testing.assert_array_equal(
+            streamed[i], preprocessor.transform(rows[i : i + WINDOW])[0]
+        )
+
+
+def test_transform_series_chunk_size_does_not_change_output(
+    preprocessor, normal_window, attack_window
+):
+    """Chunking is a memory knob only -- unlike batch size in scoring, it is exact."""
+    rows = np.vstack([normal_window, attack_window])
+    np.testing.assert_array_equal(
+        _series_windows(preprocessor, rows, chunk=7),
+        _series_windows(preprocessor, rows, chunk=4096),
+    )
+
+
+def test_transform_series_chunk_larger_than_input(preprocessor, normal_window):
+    assert _series_windows(preprocessor, normal_window, chunk=10_000).shape == (
+        1, WINDOW, N_FEATURES,
+    )
+
+
+def test_transform_series_yields_expected_chunk_sizes(
+    preprocessor, normal_window, attack_window
+):
+    rows = np.vstack([normal_window, attack_window])          # 31 windows
+    sizes = [len(c) for c in preprocessor.transform_series(rows, chunk=10)]
+    assert sizes == [10, 10, 10, 1]
+
+
+def test_transform_series_output_is_float32_and_contiguous(preprocessor, normal_window):
+    out = next(preprocessor.transform_series(normal_window))
+    assert out.dtype == np.float32
+    assert out.flags["C_CONTIGUOUS"]
+
+
+def test_transform_series_rejects_short_series(preprocessor, normal_window):
+    with pytest.raises(PreprocessingError, match="at least 30 rows"):
+        _series_windows(preprocessor, normal_window[:29])
+
+
+def test_transform_series_rejects_wrong_feature_count(preprocessor, normal_window):
+    with pytest.raises(PreprocessingError, match="expected a \\(n_samples, 45\\)"):
+        _series_windows(preprocessor, normal_window[:, :44])
+
+
+def test_transform_series_rejects_3d(preprocessor, normal_window):
+    with pytest.raises(PreprocessingError, match="expected a \\(n_samples, 45\\)"):
+        _series_windows(preprocessor, normal_window[np.newaxis, ...])
+
+
+def test_transform_series_rejects_bad_chunk(preprocessor, normal_window):
+    with pytest.raises(PreprocessingError, match="chunk must be >= 1"):
+        _series_windows(preprocessor, normal_window, chunk=0)
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_transform_series_rejects_non_finite(preprocessor, normal_window, bad):
+    """Same refusal as transform(): a stuck channel is a fault, not a fill."""
+    rows = normal_window.copy()
+    rows[3, 7] = bad
+    with pytest.raises(PreprocessingError, match="non-finite value at row=3"):
+        _series_windows(preprocessor, rows)
+
+
+def test_transform_series_attack_window_still_escapes_bounds(
+    preprocessor, normal_window, attack_window
+):
+    """clip=False must survive the offline path too, or detection signal is lost."""
+    rows = np.vstack([normal_window, attack_window])
+    assert _series_windows(preprocessor, rows).max() > 1.0
