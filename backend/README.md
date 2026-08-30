@@ -78,6 +78,58 @@ detector never sees them.
 No severity or high/medium/low classification — just the score, the threshold,
 the boolean decision, and the per-feature contribution.
 
+Each `/score` call also updates the in-memory alert engine (Phase 4) — see the
+monitoring endpoints below. This does **not** change the `/score` response.
+
+## Monitoring endpoints (Phase 5A)
+
+Read-only views over the in-memory `AlertEngine` on `app.state`. The backend only
+drives and reads the engine — deduplication, lifecycle, severity, and top-feature
+attribution all live in `alerting/`, never here. **Alert state is in-memory and is
+lost when the process restarts (no database in this phase).**
+
+### `GET /status`
+System + detector + latest-detection + alert rollup. Always **200** (reports
+`status="degraded"`, `detector_loaded=false` if the detector cannot load — unlike
+`/health`, which is the 503 liveness probe):
+```json
+{
+  "status": "ok", "detector_loaded": true, "model_type": "TranAD",
+  "window": 30, "n_features": 45, "threshold": 9.269035945180804e-05,
+  "threshold_caveat": "...",
+  "last_anomaly_score": 0.0021, "last_is_anomaly": true, "last_window_end": "2015-12-30T09:51:05",
+  "active_alert_count": 1, "total_alert_count": 3, "alert_state_in_memory": true
+}
+```
+
+### `GET /alerts?limit=50&status=open|closed`
+Alert history, **most-recent first**. Optional `status` filter. Returns a list of
+the stable `AlertModel` DTO.
+
+### `GET /alerts/active`
+The currently-open alert, or `null` when the stream is normal:
+```json
+{
+  "active_alert": {
+    "alert_id": "alert-0001-2015-12-30T09:51:05", "category": "PROCESS_ANOMALY",
+    "status": "OPEN", "severity": "HIGH", "is_anomaly": true,
+    "anomaly_score": 0.0021, "threshold": 9.269035945180804e-05,
+    "detected_at": "2015-12-30T09:51:05", "window_start": "2015-12-30T09:51:00",
+    "window_end": "2015-12-30T09:51:05", "opened_at": "2015-12-30T09:51:05",
+    "closed_at": null, "window_count": 1,
+    "top_features": [{"feature": "AIT201", "error": 0.0253}, "...5..."]
+  }
+}
+```
+`severity` is an **engineering heuristic** (`score ÷ threshold` band), not an ML
+output.
+
+## CORS
+
+The dashboard runs on a separate origin in development, so the backend allow-lists
+the dev static-server origins explicitly (`DEV_CORS_ORIGINS` in `app.py`) — **not**
+a wildcard. A production origin must be added deliberately.
+
 ## Error behaviour
 
 | Situation | Status |
@@ -101,8 +153,14 @@ The two 422 paths carry **deliberately distinct `detail` shapes**:
 
 ## Tests
 
-`tests/test_api.py` — 22 cases (health 200 + lazy-load path + 503-on-load-failure,
-valid score, the rejection matrix across both 422 forms, determinism, threshold
-decision, per-feature attribution, controlled 500, detector-actually-invoked, no
-artifact mutation), reusing the Phase 1 golden vectors. No dataset required. Part
-of the full **238-test** suite (`pytest -q`).
+- `tests/test_api.py` — 22 cases (health 200 + lazy-load path + 503-on-load-failure,
+  valid score, the rejection matrix across both 422 forms, determinism, threshold
+  decision, per-feature attribution, controlled 500, detector-actually-invoked, no
+  artifact mutation), reusing the Phase 1 golden vectors.
+- `tests/test_monitoring_api.py` — 15 cases for `/status`, `/alerts`, `/alerts/active`:
+  active alert appears after an anomaly and closes on return to normal, dedup of
+  consecutive anomalies, status filter, stable serialization, CORS (dev origin
+  allowed, no wildcard), unchanged `/health` + `/score` contracts, and an end-to-end
+  replay → `/score` → engine → `/alerts/active` test.
+
+No dataset required. Part of the full **286-test** suite (`pytest -q`).

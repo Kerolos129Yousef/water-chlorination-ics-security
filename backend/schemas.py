@@ -125,3 +125,67 @@ class HealthResponse(BaseModel):
     detail: str | None = Field(
         None, description="Human-readable reason when degraded (no paths/tracebacks)."
     )
+
+
+# ------------------------------------------------------------- monitoring (Phase 5A)
+
+
+class AlertModel(BaseModel):
+    """Stable DTO for one alert -- the wire form of :class:`alerting.alert.Alert`.
+
+    Built from ``Alert`` (never the raw object) so the API contract is decoupled
+    from the engine's internals. ``severity`` is an engineering heuristic, not an
+    ML output; ``status`` is ``OPEN`` or ``CLOSED``.
+    """
+
+    alert_id: str
+    category: str
+    status: str
+    severity: str
+    is_anomaly: bool
+    anomaly_score: float
+    threshold: float
+    detected_at: str | None = None
+    window_start: str | None = None
+    window_end: str | None = None
+    opened_at: str | None = None
+    closed_at: str | None = None
+    window_count: int
+    top_features: list[FeatureError] = Field(
+        ..., description="Peak window's top-N per-feature contributions (from the detector)."
+    )
+
+
+class ActiveAlertResponse(BaseModel):
+    """The currently-open alert, or ``null`` when the stream is normal."""
+
+    active_alert: AlertModel | None = None
+
+
+class StatusResponse(BaseModel):
+    """System + detector + latest-detection + alert rollup for the operator view.
+
+    Returns HTTP 200 even when the detector cannot load (``status="degraded"``,
+    ``detector_loaded=False``) so the dashboard can render a degraded banner
+    rather than a dead page; ``/health`` remains the 503 liveness probe.
+    Alert state is **in-memory** and resets when the backend process restarts.
+    """
+
+    status: str
+    detector_loaded: bool
+    model_type: str
+    window: int | None = None
+    n_features: int | None = None
+    threshold: float | None = None
+    threshold_caveat: str | None = None
+    # Most recent window scored via /score (null until the first call).
+    last_anomaly_score: float | None = None
+    last_is_anomaly: bool | None = None
+    last_window_end: str | None = None
+    # Alert rollup.
+    active_alert_count: int = 0
+    total_alert_count: int = 0
+    alert_state_in_memory: bool = Field(
+        True,
+        description="Alert state lives in memory only and is lost on restart (no DB yet).",
+    )

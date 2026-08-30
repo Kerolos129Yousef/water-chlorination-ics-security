@@ -143,6 +143,9 @@ closure). This records what is actually built and tested in the repository.
 | Phase 1.5 | Threshold-honesty evaluation, measured detection metrics + provenance | **COMPLETE** |
 | Phase 2A | SWaT replay + rolling window (`simulator/`) | **COMPLETE** |
 | Phase 2B | FastAPI backend (`backend/`) — thin API over the stateless detector | **COMPLETE** |
+| Phase 3 | End-to-end integration: replay → window → HTTP `/score` → TranAD (`simulator/pipeline.py`, `scripts/run_e2e_demo.py`) | **COMPLETE** |
+| Phase 4 | Alert engine: detection decisions → deduplicated, lifecycle-managed alerts (`alerting/`) | **COMPLETE** |
+| Phase 5A | Monitoring API (`/status`, `/alerts`, `/alerts/active`) + minimal operator dashboard (`frontend/`) | **COMPLETE** |
 
 **Actual implementation order:** Phase 2A (SWaT replay + rolling window) was
 built **before** Phase 2B (FastAPI backend). This differs from the numbered
@@ -164,11 +167,40 @@ first so the backend could be designed as a thin, stateless API with the
   percentile) is used as-is; the known FPR caveat is surfaced, not silently
   corrected.
 
-Full test suite: **238 tests passing** (`pytest -q`), including 22 backend API
-cases.
+**Phase 3 wires the layers end-to-end** over the FastAPI HTTP boundary
+(`SWaTReplay → RollingWindow → POST /score → TranADDetector`) via an *injected*
+scorer, so no boundary is violated: buffering stays in `RollingWindow`, scoring
+stays behind the API, and `simulator/` still imports neither `torch`, `fastapi`,
+nor `ml.src`. Verified on real SWaT data — clean segments stay normal (0 false
+positives on the sampled windows), attack segments are flagged (100% on the
+demo's auto-selected segment), over both the in-process ASGI app and a real
+`uvicorn` socket.
 
-Not started (explicitly out of scope for this phase): Phase 3+ — alert engine,
-monitoring dashboard, Docker, AWS, Terraform, Kubernetes, CI/CD.
+**Phase 4 adds the alert engine** (`alerting/`): the one intentionally *stateful*
+stage. It turns per-window detector decisions into deduplicated, lifecycle-managed
+alerts (a continuous anomaly is ONE alert: `OPEN` → dedup across overlapping
+windows → `CLOSE` on return to normal). It duck-types on the detector's existing
+output, so it imports no `torch`, FastAPI, `ml.src`, or `simulator`; attribution
+is reused verbatim (never recomputed); severity is an explicitly-labelled
+engineering heuristic (`score/threshold` ratio), not an ML prediction. In-memory
+only — no database yet.
+
+**Phase 5A makes the MVP observable**: the backend gains read-only monitoring
+endpoints (`GET /status`, `/alerts`, `/alerts/active`) over the in-memory
+`AlertEngine` held on `app.state` and fed from the `/score` flow (the `/score`
+response contract is unchanged; dedup/lifecycle/severity/attribution stay in
+`alerting/`). A minimal zero-build operator dashboard (`frontend/index.html`,
+vanilla HTML/JS, polling) consumes only the API. Explicit dev CORS
+(`DEV_CORS_ORIGINS`, not a wildcard). **Alert state is in-memory only and is lost
+on backend restart — no database in this phase (deferred, to be evaluated with
+persistence).**
+
+Full test suite: **286 tests passing** (`pytest -q`), including 22 backend API
+cases, 15 monitoring-API cases, 12 Phase 3 end-to-end integration cases, and 21
+Phase 4 alert-engine cases.
+
+Not started (explicitly out of scope): persistence/database, Docker, AWS,
+Terraform, Kubernetes, CI/CD, notifications, authentication.
 
 ---
 

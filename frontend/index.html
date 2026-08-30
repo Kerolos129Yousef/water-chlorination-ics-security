@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Water Chlorination ICS — TranAD Monitor</title>
+<!--
+  Phase 5A operator dashboard. Zero-build, single file: it talks ONLY to the
+  backend API (GET /status, /alerts/active, /alerts) by polling. No detection or
+  alert logic lives here — the frontend just renders backend state.
+
+  Run (dashboard served separately from the API in dev):
+      cd frontend && python -m http.server 5500
+      # then open http://127.0.0.1:5500/  (backend on http://127.0.0.1:8000)
+  Override:  ?api=http://host:port   &poll=2000   (ms)
+-->
+<style>
+  :root {
+    --bg:#0f1720; --panel:#182430; --edge:#26333f; --txt:#e6edf3; --muted:#8b9aa7;
+    --ok:#2ea043; --warn:#d29922; --bad:#f85149; --accent:#388bfd;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--edge); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .spacer { flex:1; }
+  .pill { padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--edge); }
+  .pill.ok { color:var(--ok); border-color:var(--ok); }
+  .pill.bad { color:var(--bad); border-color:var(--bad); }
+  .pill.warn { color:var(--warn); border-color:var(--warn); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; padding:18px 20px; }
+  .card { background:var(--panel); border:1px solid var(--edge); border-radius:10px; padding:16px; }
+  .card h2 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:4px 0; }
+  .row .k { color:var(--muted); }
+  .row .v { font-variant-numeric:tabular-nums; text-align:right; }
+  .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:6px; font-weight:700; font-size:12px; }
+  .badge.normal { background:rgba(46,160,67,.15); color:var(--ok); }
+  .badge.anomaly { background:rgba(248,81,73,.15); color:var(--bad); }
+  .sev-LOW { color:var(--ok); } .sev-MEDIUM { color:var(--warn); } .sev-HIGH { color:var(--bad); }
+  .muted { color:var(--muted); }
+  .empty { color:var(--muted); font-style:italic; padding:8px 0; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--edge); font-variant-numeric:tabular-nums; }
+  th { color:var(--muted); font-weight:600; }
+  .feat { display:flex; justify-content:space-between; gap:8px; padding:3px 0; border-bottom:1px dashed var(--edge); }
+  .banner { display:none; margin:0 20px; padding:10px 14px; border-radius:8px; background:rgba(248,81,73,.12);
+            border:1px solid var(--bad); color:var(--bad); }
+  .banner.show { display:block; }
+  .spark { display:flex; align-items:flex-end; gap:2px; height:48px; margin-top:8px; }
+  .spark span { flex:1; background:var(--accent); min-height:2px; border-radius:1px 1px 0 0; opacity:.85; }
+  .spark span.hot { background:var(--bad); }
+  footer { color:var(--muted); font-size:12px; padding:8px 20px 24px; }
+  code { background:#0b0f14; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>💧 Water Chlorination ICS — TranAD Monitor</h1>
+  <span class="spacer"></span>
+  <span class="muted" id="lastUpdate">—</span>
+  <span class="pill" id="conn">connecting…</span>
+</header>
+
+<div class="banner" id="banner"></div>
+
+<div class="grid">
+  <!-- 1. System status -->
+  <div class="card">
+    <h2>System status</h2>
+    <div class="row"><span class="k">Backend</span><span class="v" id="sysBackend">—</span></div>
+    <div class="row"><span class="k">Detector</span><span class="v" id="sysDetector">—</span></div>
+    <div class="row"><span class="k">Model</span><span class="v" id="sysModel">—</span></div>
+    <div class="row"><span class="k">Threshold</span><span class="v" id="sysThreshold">—</span></div>
+    <div class="row"><span class="k">Alert state</span><span class="v muted" id="sysPersist">—</span></div>
+  </div>
+
+  <!-- 2. Detection status -->
+  <div class="card">
+    <h2>Detection status (latest window)</h2>
+    <div class="big" id="detScore">—</div>
+    <div class="row"><span class="k">Decision</span><span class="v"><span class="badge normal" id="detBadge">—</span></span></div>
+    <div class="row"><span class="k">Threshold</span><span class="v" id="detThreshold">—</span></div>
+    <div class="row"><span class="k">Window end</span><span class="v" id="detWindowEnd">—</span></div>
+    <div class="spark" id="spark" title="recent anomaly scores"></div>
+  </div>
+
+  <!-- 3. Active alert -->
+  <div class="card">
+    <h2>Active alert</h2>
+    <div id="activeAlert"><div class="empty">No active alerts.</div></div>
+  </div>
+
+  <!-- 4. Alert history -->
+  <div class="card" style="grid-column:1 / -1;">
+    <h2>Alert history</h2>
+    <div id="alertHistory"><div class="empty">No alerts yet.</div></div>
+  </div>
+</div>
+
+<footer>
+  Polling <code id="cfgApi"></code> every <span id="cfgPoll"></span> ms.
+  Alert state is <b>in-memory only</b> and resets when the backend restarts (no database in this phase).
+  Severity is an engineering heuristic (score ÷ threshold), not an ML prediction.
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  const q = new URLSearchParams(location.search);
+  const API = (q.get("api") || "http://127.0.0.1:8000").replace(/\/+$/, "");
+  const POLL = Math.max(500, parseInt(q.get("poll") || "2000", 10));
+  document.getElementById("cfgApi").textContent = API;
+  document.getElementById("cfgPoll").textContent = POLL;
+
+  const $ = (id) => document.getElementById(id);
+  const scores = [];                 // client-side trend of recent scores
+  const MAX_SPARK = 40;
+
+  const fmt = (x, d = 6) => (x === null || x === undefined ? "—" : Number(x).toPrecision(d));
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+  function setConn(ok) {
+    const el = $("conn");
+    el.textContent = ok ? "connected" : "backend unavailable";
+    el.className = "pill " + (ok ? "ok" : "bad");
+    $("banner").className = "banner" + (ok ? "" : " show");
+    if (!ok) $("banner").textContent = "⚠ Cannot reach the backend API at " + API + ". Retrying…";
+  }
+
+  async function getJSON(path) {
+    const r = await fetch(API + path, { headers: { "accept": "application/json" } });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+
+  function renderStatus(s) {
+    const detOk = !!s.detector_loaded;
+    $("sysBackend").innerHTML = badge(s.status === "ok", s.status || "—");
+    $("sysDetector").innerHTML = badge(detOk, detOk ? "loaded" : "unavailable");
+    $("sysModel").textContent = s.model_type || "—";
+    $("sysThreshold").textContent = fmt(s.threshold);
+    $("sysPersist").textContent = s.alert_state_in_memory ? "in-memory (resets on restart)" : "—";
+
+    const anomaly = s.last_is_anomaly === true;
+    $("detScore").textContent = s.last_anomaly_score == null ? "—" : fmt(s.last_anomaly_score);
+    const b = $("detBadge");
+    b.textContent = s.last_is_anomaly == null ? "no data" : (anomaly ? "ANOMALY" : "NORMAL");
+    b.className = "badge " + (anomaly ? "anomaly" : "normal");
+    $("detThreshold").textContent = fmt(s.threshold);
+    $("detWindowEnd").textContent = s.last_window_end || "—";
+
+    if (s.last_anomaly_score != null) {
+      scores.push({ v: s.last_anomaly_score, hot: anomaly });
+      while (scores.length > MAX_SPARK) scores.shift();
+      renderSpark(s.threshold);
+    }
+  }
+
+  function renderSpark() {
+    if (!scores.length) { $("spark").innerHTML = ""; return; }
+    const max = Math.max(...scores.map((p) => p.v)) || 1;
+    $("spark").innerHTML = scores.map((p) => {
+      const h = Math.max(2, Math.round((p.v / max) * 46));
+      return `<span class="${p.hot ? "hot" : ""}" style="height:${h}px"></span>`;
+    }).join("");
+  }
+
+  function badge(ok, text) {
+    return `<span class="badge ${ok ? "normal" : "anomaly"}">${esc(text)}</span>`;
+  }
+
+  function featureList(feats) {
+    if (!feats || !feats.length) return '<div class="empty">—</div>';
+    return feats.map((f) =>
+      `<div class="feat"><span>${esc(f.feature)}</span><span>${fmt(f.error, 4)}</span></div>`).join("");
+  }
+
+  function renderActive(resp) {
+    const a = resp && resp.active_alert;
+    const el = $("activeAlert");
+    if (!a) { el.innerHTML = '<div class="empty">No active alerts.</div>'; return; }
+    el.innerHTML = `
+      <div class="row"><span class="k">ID</span><span class="v">${esc(a.alert_id)}</span></div>
+      <div class="row"><span class="k">Status</span><span class="v"><span class="badge anomaly">${esc(a.status)}</span></span></div>
+      <div class="row"><span class="k">Severity</span><span class="v sev-${esc(a.severity)}">${esc(a.severity)} <span class="muted">(heuristic)</span></span></div>
+      <div class="row"><span class="k">Peak score</span><span class="v">${fmt(a.anomaly_score)}</span></div>
+      <div class="row"><span class="k">Threshold</span><span class="v">${fmt(a.threshold)}</span></div>
+      <div class="row"><span class="k">Opened</span><span class="v">${esc(a.opened_at || a.detected_at || "—")}</span></div>
+      <div class="row"><span class="k">Window span</span><span class="v">${esc(a.window_start || "—")} → ${esc(a.window_end || "—")}</span></div>
+      <div class="row"><span class="k">Windows</span><span class="v">${a.window_count}</span></div>
+      <h2 style="margin-top:12px">Top contributing features</h2>
+      ${featureList(a.top_features)}`;
+  }
+
+  function renderHistory(alerts) {
+    const el = $("alertHistory");
+    if (!alerts || !alerts.length) { el.innerHTML = '<div class="empty">No alerts yet.</div>'; return; }
+    const rows = alerts.map((a) => `
+      <tr>
+        <td>${esc(a.alert_id)}</td>
+        <td><span class="badge ${a.status === "OPEN" ? "anomaly" : "normal"}">${esc(a.status)}</span></td>
+        <td class="sev-${esc(a.severity)}">${esc(a.severity)}</td>
+        <td>${fmt(a.anomaly_score)}</td>
+        <td>${a.window_count}</td>
+        <td>${esc(a.opened_at || a.detected_at || "—")}</td>
+        <td>${esc(a.closed_at || "—")}</td>
+      </tr>`).join("");
+    el.innerHTML = `<table>
+      <thead><tr><th>ID</th><th>Status</th><th>Severity</th><th>Peak score</th><th>Windows</th><th>Opened</th><th>Closed</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
+  async function tick() {
+    try {
+      const [status, active, alerts] = await Promise.all([
+        getJSON("/status"),
+        getJSON("/alerts/active"),
+        getJSON("/alerts?limit=20"),
+      ]);
+      setConn(true);
+      renderStatus(status);
+      renderActive(active);
+      renderHistory(alerts);
+      $("lastUpdate").textContent = "updated " + new Date().toLocaleTimeString();
+    } catch (err) {
+      setConn(false);            // graceful: banner + keep last known render
+    }
+  }
+
+  tick();
+  setInterval(tick, POLL);
+})();
+</script>
+</body>
+</html>

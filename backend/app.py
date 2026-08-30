@@ -17,23 +17,52 @@ import logging
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from alerting import AlertEngine
+from alerting.alert import Alert
 from ml.src.detector import TranADDetector
 
-from .schemas import FeatureError, HealthResponse, ScoreRequest, ScoreResponse
+from .schemas import (
+    ActiveAlertResponse,
+    AlertModel,
+    FeatureError,
+    HealthResponse,
+    ScoreRequest,
+    ScoreResponse,
+    StatusResponse,
+)
 
 logger = logging.getLogger("backend.api")
 
 MODEL_TYPE = "TranAD"
 
+# Dashboard runs separately from the API in development, so cross-origin requests
+# need explicit allow-listing. These are the local static-server origins only --
+# NOT a wildcard. A production origin must be added deliberately, never silently.
+DEV_CORS_ORIGINS = [
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
 
-def create_app(detector: TranADDetector | None = None) -> FastAPI:
+
+def create_app(
+    detector: TranADDetector | None = None,
+    alert_engine: AlertEngine | None = None,
+) -> FastAPI:
     """Build the API.
 
     ``detector`` may be injected (tests pass the shared, already-loaded detector,
     or a stub); if ``None`` it is lazily loaded from the default artifacts on the
     first request, so importing this module never costs a model load.
+
+    ``alert_engine`` holds the in-memory alert lifecycle state (Phase 4). One is
+    created per app if not injected; tests inject a fresh one for isolation. The
+    backend never re-implements dedup/lifecycle/severity -- it only drives and
+    reads this engine. Alert state is in-memory and is lost on process restart.
     """
     app = FastAPI(
         title="Water Chlorination ICS — TranAD Detection API",
@@ -42,6 +71,15 @@ def create_app(detector: TranADDetector | None = None) -> FastAPI:
         "The client owns the rolling 30-sample window; the detector is stateless.",
     )
     app.state.detector = detector
+    app.state.alert_engine = alert_engine if alert_engine is not None else AlertEngine()
+    app.state.last_detection = None  # rollup of the most recent /score, for /status
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=DEV_CORS_ORIGINS,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
 
     @app.exception_handler(RequestValidationError)
     async def _on_validation_error(request, exc: RequestValidationError):
@@ -121,6 +159,11 @@ def create_app(detector: TranADDetector | None = None) -> FastAPI:
             logger.exception("TranAD inference failed for a valid-shaped window")
             raise HTTPException(status_code=500, detail="inference failed")
 
+        # Update monitoring/alert state from the same decision. This must never
+        # affect the detection response: a failure here is logged and swallowed so
+        # /score keeps returning the score even if the monitoring side has a bug.
+        _update_monitoring(app, request, result)
+
         return ScoreResponse(
             anomaly_score=float(result.anomaly_score),
             threshold=float(result.threshold),
@@ -134,7 +177,110 @@ def create_app(detector: TranADDetector | None = None) -> FastAPI:
             window_end=request.window_end,
         )
 
+    # ---------------------------------------------------------------- monitoring
+
+    @app.get("/status", response_model=StatusResponse, tags=["monitoring"])
+    def status() -> StatusResponse:
+        """System + detector + latest-detection + alert rollup for the dashboard.
+
+        Always 200: if the detector cannot load, reports ``status="degraded"`` /
+        ``detector_loaded=False`` with detector fields null (``/health`` stays the
+        503 liveness probe). Alert state is in-memory; it resets on restart.
+        """
+        engine: AlertEngine = app.state.alert_engine
+        last = app.state.last_detection
+        try:
+            det = get_detector()
+            det_fields = dict(
+                detector_loaded=True,
+                window=det.window,
+                n_features=det.n_features,
+                threshold=det.threshold,
+                threshold_caveat=det.threshold_caveat,
+            )
+            overall = "ok"
+        except Exception:  # noqa: BLE001 - degraded, not a 500; dashboard still renders
+            logger.exception("detector unavailable while building /status")
+            det_fields = dict(
+                detector_loaded=False,
+                window=None,
+                n_features=None,
+                threshold=None,
+                threshold_caveat=None,
+            )
+            overall = "degraded"
+
+        return StatusResponse(
+            status=overall,
+            model_type=MODEL_TYPE,
+            last_anomaly_score=None if last is None else last["anomaly_score"],
+            last_is_anomaly=None if last is None else last["is_anomaly"],
+            last_window_end=None if last is None else last["window_end"],
+            active_alert_count=1 if engine.active_alert is not None else 0,
+            total_alert_count=len(engine.alerts),
+            **det_fields,
+        )
+
+    @app.get("/alerts", response_model=list[AlertModel], tags=["monitoring"])
+    def list_alerts(limit: int = 50, status: str | None = None) -> list[AlertModel]:
+        """Alert history, most-recent first. Optional ``status=open|closed`` filter."""
+        alerts = list(app.state.alert_engine.alerts)
+        if status is not None:
+            wanted = status.upper()
+            alerts = [a for a in alerts if a.status.value == wanted]
+        alerts = list(reversed(alerts))[: max(0, limit)]
+        return [_alert_to_model(a) for a in alerts]
+
+    @app.get("/alerts/active", response_model=ActiveAlertResponse, tags=["monitoring"])
+    def active_alert() -> ActiveAlertResponse:
+        """The currently-open alert, or ``null`` when the stream is normal."""
+        active = app.state.alert_engine.active_alert
+        return ActiveAlertResponse(
+            active_alert=_alert_to_model(active) if active is not None else None
+        )
+
     return app
+
+
+def _update_monitoring(app: FastAPI, request: ScoreRequest, result) -> None:
+    """Feed one detection decision into the alert engine + record the last score.
+
+    Deliberately best-effort: monitoring must never break detection, so any failure
+    is logged and swallowed. Timestamps come from the request (the detector never
+    sees them); they are ISO strings so the alert record is JSON-serialisable.
+    """
+    try:
+        ws = request.window_start.isoformat() if request.window_start else None
+        we = request.window_end.isoformat() if request.window_end else None
+        app.state.alert_engine.process(result, window_start=ws, window_end=we)
+        app.state.last_detection = {
+            "anomaly_score": float(result.anomaly_score),
+            "is_anomaly": bool(result.is_anomaly),
+            "threshold": float(result.threshold),
+            "window_end": we,
+        }
+    except Exception:  # noqa: BLE001 - monitoring failure must not affect /score
+        logger.exception("monitoring/alert update failed; detection response unaffected")
+
+
+def _alert_to_model(alert: Alert) -> AlertModel:
+    """Map an :class:`~alerting.alert.Alert` to its stable wire DTO."""
+    return AlertModel(
+        alert_id=alert.alert_id,
+        category=alert.category,
+        status=alert.status.value,
+        severity=alert.severity.value,
+        is_anomaly=alert.is_anomaly,
+        anomaly_score=alert.anomaly_score,
+        threshold=alert.threshold,
+        detected_at=alert.detected_at,
+        window_start=alert.window_start,
+        window_end=alert.window_end,
+        opened_at=alert.opened_at,
+        closed_at=alert.closed_at,
+        window_count=alert.window_count,
+        top_features=[FeatureError(feature=name, error=err) for name, err in alert.top_features],
+    )
 
 
 def _require_canonical_features(provided: list[str], canonical: list[str]) -> None:
