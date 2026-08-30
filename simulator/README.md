@@ -136,10 +136,69 @@ testable.
 
 ---
 
+## End-to-end over the HTTP boundary (Phase 3)
+
+`simulator/pipeline.py` wires the pieces together through the **FastAPI `/score`**
+boundary — the integration that proves the whole path on real SWaT data:
+
+```
+SWaTReplay ─▶ RollingWindow ─▶ window_to_request ─▶ POST /score ─▶ TranAD ─▶ EndToEndResult
+```
+
+```python
+import math
+from simulator import SWaTReplay, run_pipeline
+from simulator.pipeline import HttpScorer
+
+replay = SWaTReplay.from_artifacts()
+s, e = replay.normal_range(min_samples=30)
+with HttpScorer("http://127.0.0.1:8000") as score:          # a running uvicorn
+    for r in run_pipeline(replay, score, start=s, stop=e, real_time_factor=math.inf):
+        print(r.window_end, r.is_anomaly, r.anomaly_score, r.top_features(3))
+```
+
+- **`window_to_request(window)`** — pure map from a `Window` to the `/score` body
+  (feature_names + the raw `30 × 45` matrix + `window_start`/`window_end` from the
+  window's own timestamps). No HTTP, no scoring.
+- **`Scorer` / `HttpScorer`** — the transport is *injected*. `HttpScorer` POSTs to a
+  live server (the production boundary; `httpx` is imported lazily). Tests inject a
+  `TestClient`-backed callable that drives the identical ASGI app in-process.
+- **`run_pipeline(replay, scorer, …)`** — streams replay → buffer → scorer, yielding
+  one `EndToEndResult` per window. Defaults to `real_time_factor=inf` (no wait);
+  buffering stays in `RollingWindow`, scoring stays behind the API.
+- **`EndToEndResult`** — preserves window bounds, `anomaly_score`, `threshold`,
+  `is_anomaly`, and the 45 per-feature attributions (plus ground-truth *metadata*
+  for demo scoring — never a model input).
+
+This module imports **no** `ml.src`, `torch`, or FastAPI — the boundary rules from
+Phase 2A still hold; the detector is reached only through the injected scorer.
+
+### Demo entrypoint
+
+```bash
+python scripts/run_e2e_demo.py --mode normal                 # clean segment → stays normal
+python scripts/run_e2e_demo.py --mode attack                 # auto-picks the clearest attack
+python scripts/run_e2e_demo.py --mode attack --base-url http://127.0.0.1:8000   # real socket
+```
+
+The attack demo **auto-selects** the attack segment that reads most clearly at
+onset (the *longest* segment is not always the most detectable — some attacks ramp
+in slowly); override with `--attack-segment N`. Defaults to the in-process ASGI
+app so it runs with zero setup; `--base-url` proves a real HTTP socket. Requires
+the licensed SWaT CSVs (read-only).
+
+---
+
 ## Tests
 
 - `tests/test_window_buffer.py` — buffer contract, synthetic and fast.
 - `tests/test_replay.py` — replay behaviour (synthetic + `@pytest.mark.dataset`
   real-data), plus an end-to-end integration with the Phase 1 detector.
+- `tests/test_integration_e2e.py` — Phase 3 full path (replay → window → HTTP
+  `/score` → TranAD): real golden normal/attack detection, 30-sample warm-up,
+  stride-1 across API calls, timestamp propagation, feature ordering, API-vs-direct
+  parity, 422 on a bad window, no buffering state in FastAPI, artifact immutability,
+  and accelerated pacing without real waiting. Uses golden vectors + tiny synthetic
+  streams — no dataset required, runs in ~2 s.
 
 Dataset-gated tests skip automatically when the licensed SWaT CSVs are absent.

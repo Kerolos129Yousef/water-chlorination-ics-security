@@ -8,11 +8,20 @@ detector. Two independent components with a clear boundary::
       pacing + segments)             rolling buffer)                     unchanged & stateless)
 
 Nothing here imports FastAPI, torch, or the detector; the replay reuses the
-provenance-backed clean Attack_v0 reconstruction from :mod:`ml.src.dataset`.
+provenance-backed clean Attack_v0 reconstruction from :mod:`ml.src.dataset`. The
+Phase 3 :mod:`~simulator.pipeline` glue drives this layer through the FastAPI
+``/score`` boundary via an *injected* scorer, so the same rule still holds.
 """
 
 from __future__ import annotations
 
+from .pipeline import (
+    EndToEndResult,
+    HttpScorer,
+    Scorer,
+    run_pipeline,
+    window_to_request,
+)
 from .swat_replay import (
     DATASET_SAMPLE_INTERVAL_SECONDS,
     DEFAULT_SUBSAMPLE,
@@ -31,4 +40,10 @@ __all__ = [
     "RollingWindow",
     "Window",
     "WindowBufferError",
+    # Phase 3 end-to-end integration (producer/client side)
+    "run_pipeline",
+    "window_to_request",
+    "EndToEndResult",
+    "Scorer",
+    "HttpScorer",
 ]
