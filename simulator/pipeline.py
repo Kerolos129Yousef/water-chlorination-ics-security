@@ -37,10 +37,12 @@ from typing import Any, Callable, Iterator, Mapping, Protocol
 import numpy as np
 
 from .swat_replay import SWaTReplay
+from .telemetry_health import TelemetryHealthMonitor, TelemetryHealthResult
 from .window_buffer import RollingWindow, Window
 
 __all__ = [
     "window_to_request",
+    "health_to_request_payload",
     "EndToEndResult",
     "Scorer",
     "HttpScorer",
@@ -70,6 +72,32 @@ def window_to_request(window: Window) -> dict[str, Any]:
     }
 
 
+def health_to_request_payload(health: TelemetryHealthResult) -> dict[str, Any]:
+    """Serialise a :class:`TelemetryHealthResult` into the ``/score`` request's
+    optional ``telemetry_health`` field (Phase 6B).
+
+    Pure and transport-free. Carries the verdict the backend forwards to the alert
+    engine -- the client computes it (the monitor is a per-sample stream observer),
+    the API only relays it. The ML input is untouched.
+    """
+    return {
+        "healthy": bool(health.healthy),
+        "fault_type": health.fault_type,
+        "reason": health.reason,
+        "timestamp": None if health.timestamp is None else _iso(health.timestamp),
+        "stuck_channels": [
+            {
+                "feature": ch.feature,
+                "unchanged_samples": int(ch.unchanged_samples),
+                "staleness_seconds": ch.staleness_seconds,
+                "last_value": float(ch.last_value),
+                "reason": ch.reason,
+            }
+            for ch in health.stuck_channels
+        ],
+    }
+
+
 @dataclass(frozen=True)
 class EndToEndResult:
     """One window's trip through the full pipeline, as data.
@@ -90,14 +118,25 @@ class EndToEndResult:
     feature_names: tuple[str, ...] = field(repr=False)
     ground_truth_label: int = 0
     contains_attack: bool = False
+    telemetry_health: TelemetryHealthResult | None = None
 
     def top_features(self, n: int = 5) -> list[tuple[str, float]]:
         """The ``n`` largest per-feature errors, descending -- which sensors drove it."""
         return sorted(self.feature_errors, key=lambda kv: kv[1], reverse=True)[:n]
 
 
-def _result_from(response: Mapping[str, Any], window: Window) -> EndToEndResult:
-    """Build an :class:`EndToEndResult` from a ``/score`` reply + the source window."""
+def _result_from(
+    response: Mapping[str, Any],
+    window: Window,
+    telemetry_health: TelemetryHealthResult | None = None,
+) -> EndToEndResult:
+    """Build an :class:`EndToEndResult` from a ``/score`` reply + the source window.
+
+    ``telemetry_health`` (when a monitor is wired in) is the sensor-health verdict
+    for this window's final sample. It is carried *alongside* the ML decision, kept
+    strictly separate: an ML anomaly and a telemetry fault can both be present and
+    stay distinguishable.
+    """
     feature_errors = tuple(
         (fe["feature"], float(fe["error"])) for fe in response["feature_errors"]
     )
@@ -111,6 +150,7 @@ def _result_from(response: Mapping[str, Any], window: Window) -> EndToEndResult:
         feature_names=tuple(response["feature_names"]),
         ground_truth_label=window.label,          # last-timestep label (metadata only)
         contains_attack=window.contains_attack,   # any-in-window (metadata only)
+        telemetry_health=telemetry_health,
     )
 
 
@@ -178,6 +218,7 @@ def run_pipeline(
     real_time_factor: float = math.inf,
     sleeper: Callable[[float], None] | None = None,
     buffer: RollingWindow | None = None,
+    health_monitor: TelemetryHealthMonitor | None = None,
 ) -> Iterator[EndToEndResult]:
     """Stream ``replay[start:stop]`` through the full pipeline, one result per window.
 
@@ -185,6 +226,13 @@ def run_pipeline(
     nothing until the rolling buffer is full (the 30-sample warm-up), then one
     per subsequent sample (stride 1) -- the buffering contract is
     :class:`RollingWindow`'s, reused verbatim.
+
+    ``health_monitor`` is optional and non-invasive. When supplied, every raw
+    sample is *also* observed by the :class:`TelemetryHealthMonitor` (independently
+    of the buffer), and each emitted result carries the sensor-health verdict for
+    its final sample in ``EndToEndResult.telemetry_health``. The monitor never
+    alters the record or the window fed to TranAD -- the ML path is byte-identical
+    whether or not a monitor is present.
 
     Pacing is delegated to :meth:`SWaTReplay.stream`. The default
     ``real_time_factor=inf`` means *no wait* -- correct for tests and
@@ -196,8 +244,16 @@ def run_pipeline(
     for record in replay.stream(
         start=start, stop=stop, real_time_factor=real_time_factor, sleeper=sleeper
     ):
+        # Observe health on the same raw sample the buffer sees; observation is
+        # read-only and independent of buffering/scoring.
+        health = health_monitor.observe(record) if health_monitor is not None else None
         win = buf.push(record)
         if win is None:
             continue  # warm-up: buffer not yet full, no window to score
-        response = scorer(window_to_request(win))
-        yield _result_from(response, win)
+        body = window_to_request(win)
+        if health is not None:
+            # Attach the window's health verdict so the backend can surface a
+            # TELEMETRY_FAULT alongside (never merged into) the ML decision.
+            body["telemetry_health"] = health_to_request_payload(health)
+        response = scorer(body)
+        yield _result_from(response, win, telemetry_health=health)

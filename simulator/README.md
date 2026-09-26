@@ -173,6 +173,45 @@ with HttpScorer("http://127.0.0.1:8000") as score:          # a running uvicorn
 This module imports **no** `ml.src`, `torch`, or FastAPI — the boundary rules from
 Phase 2A still hold; the detector is reached only through the injected scorer.
 
+---
+
+## Telemetry / sensor health (Phase 6A)
+
+`simulator/telemetry_health.py` adds a **`TelemetryHealthMonitor`** at the same
+ingest boundary as `RollingWindow` — a *separate observer* of the same telemetry
+stream that detects **finite-but-stuck** continuous sensor channels:
+
+```
+TelemetryRecord ─▶ TelemetryHealthMonitor.observe() ─▶ TelemetryHealthResult
+                └▶ RollingWindow.push() ─▶ Window ─▶ TranAD (ML path, unchanged)
+```
+
+```python
+from simulator import TelemetryHealthMonitor
+monitor = TelemetryHealthMonitor(detector.feature_names)   # defaults: continuous sensors, 2880 samples
+for record in replay.stream():
+    health = monitor.observe(record)
+    if not health.healthy:
+        print("TELEMETRY_FAULT", health.affected_features)   # distinct from an ML anomaly
+```
+
+- Flags a **`STUCK_CHANNEL`** when a *continuous* sensor's finite value is
+  bit-identical for `max_unchanged_samples` consecutive samples.
+- **Read-only**: never forward-fills, repairs, clips, or suppresses — the ML input
+  is byte-identical whether or not a monitor is attached. Imports only numpy.
+- Monitors **continuous sensors** (`FIT/LIT/AIT/DPIT/PIT`) by default; **discrete
+  actuators** (`MV/P/UV`) legitimately hold state and are excluded (opt in via
+  `monitored_features`).
+- Default `max_unchanged_samples=2880` (4 h at the 5 s cadence) is **measured
+  zero-false-positive** on the normal SWaT slice — see
+  `docs/provenance/phase6a_telemetry_health.md` for the evidence and the
+  false-positive-vs-threshold table.
+- Telemetry faults stay **distinct** from ML `PROCESS_ANOMALY`s; both can be
+  present on one window. Wire the monitor into `run_pipeline(..., health_monitor=…)`
+  and the verdict rides on `EndToEndResult.telemetry_health`. By design it is
+  **not** added to the thin, stateless FastAPI layer (per-sample stream state stays
+  here at the ingest layer).
+
 ### Demo entrypoint
 
 ```bash
@@ -200,5 +239,12 @@ the licensed SWaT CSVs (read-only).
   parity, 422 on a bad window, no buffering state in FastAPI, artifact immutability,
   and accelerated pacing without real waiting. Uses golden vectors + tiny synthetic
   streams — no dataset required, runs in ~2 s.
+- `tests/test_telemetry_health.py` — Phase 6A `TelemetryHealthMonitor` unit
+  contract (28 cases): classification, stuck detection + boundary, non-finite
+  handling, recovery, isolation, and configuration validation. Fully synthetic.
+- `tests/test_telemetry_health_integration.py` — Phase 6A over the real ASGI app +
+  TranAD (6 cases): fault surfaced through `run_pipeline`, ML path unaffected, ML
+  anomaly + telemetry fault coexist and stay distinct, AlertEngine unaffected,
+  `/status` unchanged.
 
 Dataset-gated tests skip automatically when the licensed SWaT CSVs are absent.

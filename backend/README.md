@@ -63,6 +63,17 @@ Liveness + readiness. The detector loads lazily on the first request:
 (names and order)**. Timestamps are optional and pass straight through — the
 detector never sees them.
 
+An **optional** `telemetry_health` object may be attached (Phase 6B): the client's
+per-window stuck-channel verdict, which the backend forwards to the alert engine's
+telemetry track. It never affects scoring and the response is unchanged. Example:
+```json
+"telemetry_health": {
+  "healthy": false, "fault_type": "TELEMETRY_FAULT",
+  "timestamp": "2015-12-28T10:02:25",
+  "stuck_channels": [{"feature": "FIT101", "unchanged_samples": 2880, "staleness_seconds": 14395.0}]
+}
+```
+
 **Response**:
 ```json
 {
@@ -78,15 +89,24 @@ detector never sees them.
 No severity or high/medium/low classification — just the score, the threshold,
 the boolean decision, and the per-feature contribution.
 
-Each `/score` call also updates the in-memory alert engine (Phase 4) — see the
-monitoring endpoints below. This does **not** change the `/score` response.
+Each `/score` call also updates the in-memory alert engine (Phase 4) — the
+detection decision on the `PROCESS_ANOMALY` track, and the optional
+`telemetry_health` verdict on the `TELEMETRY_FAULT` track (Phase 6B). This does
+**not** change the `/score` response.
 
 ## Monitoring endpoints (Phase 5A)
 
-Read-only views over the in-memory `AlertEngine` on `app.state`. The backend only
-drives and reads the engine — deduplication, lifecycle, severity, and top-feature
-attribution all live in `alerting/`, never here. **Alert state is in-memory and is
-lost when the process restarts (no database in this phase).**
+Read-only views over the `AlertEngine` on `app.state`. The backend only drives and
+reads the engine — deduplication, lifecycle, severity, and top-feature attribution
+all live in `alerting/`, never here.
+
+**Persistence (Phase 7).** Alert state is durable *behind* the engine via an
+`AlertStore`. Configure with `ALERT_STORAGE_BACKEND=memory|sqlite` (default
+`memory`) and `ALERT_DB_PATH=…` (SQLite file; auto-created). With `sqlite`, a
+backend restart recovers active incidents (both categories) and history — the API
+serves the recovered state. The default (`memory`) keeps the old behaviour (state
+lost on restart). FastAPI itself remains stateless; runtime `*.sqlite3` files are
+git-ignored. See `docs/provenance/phase7_alert_persistence.md`.
 
 ### `GET /status`
 System + detector + latest-detection + alert rollup. Always **200** (reports
@@ -98,16 +118,25 @@ System + detector + latest-detection + alert rollup. Always **200** (reports
   "window": 30, "n_features": 45, "threshold": 9.269035945180804e-05,
   "threshold_caveat": "...",
   "last_anomaly_score": 0.0021, "last_is_anomaly": true, "last_window_end": "2015-12-30T09:51:05",
-  "active_alert_count": 1, "total_alert_count": 3, "alert_state_in_memory": true
+  "active_alert_count": 1, "total_alert_count": 3,
+  "active_telemetry_fault_count": 1, "telemetry_fault_channels": ["FIT101"],
+  "alert_state_in_memory": true
 }
 ```
+`active_alert_count` is the ML track; `active_telemetry_fault_count` /
+`telemetry_fault_channels` are the Phase 6B telemetry rollup (bounded summary, no
+per-sample state).
 
-### `GET /alerts?limit=50&status=open|closed`
-Alert history, **most-recent first**. Optional `status` filter. Returns a list of
-the stable `AlertModel` DTO.
+### `GET /alerts?limit=50&status=open|closed&category=PROCESS_ANOMALY|TELEMETRY_FAULT`
+Alert history, **most-recent first**. Optional `status` and `category` filters
+(the latter lets the UI list the two kinds of finding separately). Returns a list
+of the stable `AlertModel` DTO — which carries `category`, and for telemetry faults
+`affected_channels`, `reason`, and `staleness_seconds`.
 
 ### `GET /alerts/active`
-The currently-open alert, or `null` when the stream is normal:
+The currently-open **PROCESS_ANOMALY** alert, or `null` when normal (ML track only;
+telemetry faults are read via `/alerts?category=TELEMETRY_FAULT` and the `/status`
+rollup):
 ```json
 {
   "active_alert": {

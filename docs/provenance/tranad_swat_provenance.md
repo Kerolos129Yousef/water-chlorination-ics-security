@@ -317,7 +317,7 @@ are concatenated with time discontinuities and do not represent a realistic tele
 | 1 | Pin the `torch` version and validate with a golden-vector test | Phase 1 | **done** — `==2.9.1`, `tests/test_golden_vectors.py` |
 | 2 | Threshold recalibration decision (§5.5) | Phase 4 / 6 honesty | deferred pending item 3 |
 | 3 | Measure **point-wise** precision/recall/F1 at the shipped threshold | Phase 6 | **approved** — do before item 2 |
-| 4 | Regression test: assert the six §5.2 features are not silently frozen in live input | Phase 1 | **partial** — non-finite input is rejected, but a channel frozen at a *plausible* constant still passes silently. Needs a stuck-channel check in the replay/ingest layer. |
+| 4 | Regression test: assert the six §5.2 features are not silently frozen in live input | Phase 1 | **done (Phase 6A)** — `simulator.telemetry_health.TelemetryHealthMonitor` adds a stuck-channel check at the ingest layer, surfacing a distinct `TELEMETRY_FAULT` without touching the ML path. Default `max_unchanged_samples=2880` is zero-FP on the measured normal SWaT slice. See [`phase6a_telemetry_health.md`](phase6a_telemetry_health.md). |
 | 5 | Regression test: assert C-order flattening (silent-corruption class) | Phase 1 | **done** — `test_fortran_flatten_changes_score` |
 | 6 | Notebook metrics tables are not in version control — only in external meeting material | Phase 0.4 | open |
 

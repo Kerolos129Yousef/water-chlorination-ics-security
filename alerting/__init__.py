@@ -19,21 +19,40 @@ from .alert import (
     DEFAULT_CATEGORY,
     HIGH_RATIO,
     MEDIUM_RATIO,
+    PROCESS_ANOMALY_CATEGORY,
+    TELEMETRY_FAULT_CATEGORY,
     Alert,
     AlertStatus,
     Severity,
     severity_for,
 )
-from .engine import AlertEngine, DetectionLike
+from .engine import AlertEngine, ChannelHealthLike, DetectionLike, TelemetryHealthLike
+from .store import (
+    AlertStore,
+    AlertStoreError,
+    InMemoryAlertStore,
+    SQLiteAlertStore,
+    alert_store_from_env,
+)
 
 __all__ = [
     "AlertEngine",
     "DetectionLike",
+    "TelemetryHealthLike",
+    "ChannelHealthLike",
     "Alert",
     "AlertStatus",
     "Severity",
     "severity_for",
     "DEFAULT_CATEGORY",
+    "PROCESS_ANOMALY_CATEGORY",
+    "TELEMETRY_FAULT_CATEGORY",
     "MEDIUM_RATIO",
     "HIGH_RATIO",
+    # Phase 7 persistence
+    "AlertStore",
+    "InMemoryAlertStore",
+    "SQLiteAlertStore",
+    "AlertStoreError",
+    "alert_store_from_env",
 ]

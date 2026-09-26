@@ -27,15 +27,23 @@ __all__ = [
     "AlertStatus",
     "Severity",
     "DEFAULT_CATEGORY",
+    "PROCESS_ANOMALY_CATEGORY",
+    "TELEMETRY_FAULT_CATEGORY",
     "severity_for",
     "MEDIUM_RATIO",
     "HIGH_RATIO",
 ]
 
-# Default alert category. The MVP has exactly one detector and one kind of finding
-# -- a process-behaviour anomaly -- so one category. Kept as a field, not hard-coded
-# into the engine, so a future detector can label its alerts differently.
-DEFAULT_CATEGORY = "PROCESS_ANOMALY"
+# Alert categories. The MVP now has two distinct kinds of finding, and they must
+# stay semantically separate (Phase 6B): a process-behaviour anomaly produced by
+# TranAD, and a telemetry/sensor-health fault produced by the stuck-channel
+# monitor. A TELEMETRY_FAULT is NOT an ML anomaly and must never be collapsed into
+# one. Kept as a field on the alert, not hard-coded into the engine.
+PROCESS_ANOMALY_CATEGORY = "PROCESS_ANOMALY"
+TELEMETRY_FAULT_CATEGORY = "TELEMETRY_FAULT"
+
+# Back-compat alias: Phase 4 used DEFAULT_CATEGORY for the (then only) ML category.
+DEFAULT_CATEGORY = PROCESS_ANOMALY_CATEGORY
 
 # Heuristic severity band edges, expressed as multiples of the threshold. Chosen for
 # transparency, NOT calibrated against labelled severity data (there is none).
@@ -106,9 +114,21 @@ class Alert:
     window_count:
         How many anomalous windows have been merged into this alert.
     severity:
-        Heuristic band (see :func:`severity_for`) -- NOT an ML output.
+        Heuristic band (see :func:`severity_for`) -- NOT an ML output. For a
+        TELEMETRY_FAULT this is a fixed placeholder (telemetry faults are not
+        ML-severity-scored); ``category`` is what carries the meaning.
     opened_at / closed_at:
         Lifecycle timestamps (``closed_at`` is ``None`` until the alert closes).
+    affected_channels:
+        For a TELEMETRY_FAULT, the stuck channel(s) this incident covers (one per
+        incident by construction -- see :meth:`AlertEngine.process_health`). Empty
+        for a PROCESS_ANOMALY.
+    reason:
+        Short human-readable cause, populated for a TELEMETRY_FAULT
+        (``STUCK_CHANNEL: ...``). ``None`` for a PROCESS_ANOMALY.
+    staleness_seconds:
+        For a TELEMETRY_FAULT, how long the channel has been frozen (latest
+        observation). ``None`` for a PROCESS_ANOMALY.
     """
 
     alert_id: str
@@ -125,6 +145,11 @@ class Alert:
     severity: Severity
     opened_at: str | None = None
     closed_at: str | None = None
+    # Telemetry-fault fields (Phase 6B). Defaulted so a PROCESS_ANOMALY alert is
+    # built exactly as before; only the telemetry track populates them.
+    affected_channels: list[str] = field(default_factory=list)
+    reason: str | None = None
+    staleness_seconds: float | None = None
 
     def to_dict(self) -> dict:
         """A JSON-friendly snapshot (enums → their string values, tuples → lists).

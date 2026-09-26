@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from alerting import AlertEngine
+from alerting import AlertEngine, InMemoryAlertStore, alert_store_from_env
 from alerting.alert import Alert
 from ml.src.detector import TranADDetector
 
@@ -59,10 +59,15 @@ def create_app(
     or a stub); if ``None`` it is lazily loaded from the default artifacts on the
     first request, so importing this module never costs a model load.
 
-    ``alert_engine`` holds the in-memory alert lifecycle state (Phase 4). One is
-    created per app if not injected; tests inject a fresh one for isolation. The
-    backend never re-implements dedup/lifecycle/severity -- it only drives and
-    reads this engine. Alert state is in-memory and is lost on process restart.
+    ``alert_engine`` holds the alert lifecycle state (Phase 4). One is created per
+    app if not injected; tests inject a fresh one for isolation. The backend never
+    re-implements dedup/lifecycle/severity -- it only drives and reads this engine.
+
+    Persistence (Phase 7): when the engine is not injected, its store is selected
+    from the environment (``ALERT_STORAGE_BACKEND=memory|sqlite``,
+    ``ALERT_DB_PATH=...``). The default is in-memory (alert state is lost on
+    restart); with ``sqlite`` the engine recovers active incidents + history on
+    construction, so a restart resumes the exact lifecycle.
     """
     app = FastAPI(
         title="Water Chlorination ICS — TranAD Detection API",
@@ -71,7 +76,10 @@ def create_app(
         "The client owns the rolling 30-sample window; the detector is stateless.",
     )
     app.state.detector = detector
-    app.state.alert_engine = alert_engine if alert_engine is not None else AlertEngine()
+    app.state.alert_engine = (
+        alert_engine if alert_engine is not None
+        else AlertEngine(store=alert_store_from_env())
+    )
     app.state.last_detection = None  # rollup of the most recent /score, for /status
 
     app.add_middleware(
@@ -210,6 +218,10 @@ def create_app(
             )
             overall = "degraded"
 
+        telemetry_faults = engine.active_telemetry_faults
+        # Report durability truthfully from the actual store type (Phase 7): the
+        # dashboard shows "in-memory (resets on restart)" only when it really is.
+        in_memory = isinstance(getattr(engine, "store", None), InMemoryAlertStore)
         return StatusResponse(
             status=overall,
             model_type=MODEL_TYPE,
@@ -218,16 +230,31 @@ def create_app(
             last_window_end=None if last is None else last["window_end"],
             active_alert_count=1 if engine.active_alert is not None else 0,
             total_alert_count=len(engine.alerts),
+            active_telemetry_fault_count=len(telemetry_faults),
+            telemetry_fault_channels=[
+                ch for a in telemetry_faults for ch in a.affected_channels
+            ],
+            alert_state_in_memory=in_memory,
             **det_fields,
         )
 
     @app.get("/alerts", response_model=list[AlertModel], tags=["monitoring"])
-    def list_alerts(limit: int = 50, status: str | None = None) -> list[AlertModel]:
-        """Alert history, most-recent first. Optional ``status=open|closed`` filter."""
+    def list_alerts(
+        limit: int = 50, status: str | None = None, category: str | None = None
+    ) -> list[AlertModel]:
+        """Alert history, most-recent first.
+
+        Optional filters: ``status=open|closed`` and
+        ``category=PROCESS_ANOMALY|TELEMETRY_FAULT`` (the latter lets the operator
+        UI list the two kinds of finding separately).
+        """
         alerts = list(app.state.alert_engine.alerts)
         if status is not None:
             wanted = status.upper()
             alerts = [a for a in alerts if a.status.value == wanted]
+        if category is not None:
+            wanted_cat = category.upper()
+            alerts = [a for a in alerts if a.category.upper() == wanted_cat]
         alerts = list(reversed(alerts))[: max(0, limit)]
         return [_alert_to_model(a) for a in alerts]
 
@@ -259,6 +286,11 @@ def _update_monitoring(app: FastAPI, request: ScoreRequest, result) -> None:
             "threshold": float(result.threshold),
             "window_end": we,
         }
+        # Forward the optional client-computed telemetry verdict to the same
+        # stateful engine, on a separate track. Independent of the ML decision:
+        # a telemetry fault never alters or suppresses the score above.
+        if request.telemetry_health is not None:
+            app.state.alert_engine.process_health(request.telemetry_health)
     except Exception:  # noqa: BLE001 - monitoring failure must not affect /score
         logger.exception("monitoring/alert update failed; detection response unaffected")
 
@@ -280,6 +312,9 @@ def _alert_to_model(alert: Alert) -> AlertModel:
         closed_at=alert.closed_at,
         window_count=alert.window_count,
         top_features=[FeatureError(feature=name, error=err) for name, err in alert.top_features],
+        affected_channels=list(alert.affected_channels),
+        reason=alert.reason,
+        staleness_seconds=alert.staleness_seconds,
     )
 
 
