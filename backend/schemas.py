@@ -23,11 +23,47 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 WINDOW = 30
 
 
+class ChannelHealthModel(BaseModel):
+    """Wire form of one stuck channel (``simulator.telemetry_health.ChannelHealth``)."""
+
+    feature: str
+    unchanged_samples: int = Field(..., ge=1)
+    staleness_seconds: float | None = None
+    last_value: float | None = None
+    reason: str = "STUCK_CHANNEL"
+
+
+class TelemetryHealthPayload(BaseModel):
+    """A per-window telemetry-health verdict, computed client-side and reported here.
+
+    The stuck-channel monitor is a per-sample *stream* observer and lives at the
+    ingest layer (Phase 6A), never in the stateless API. The client reports only
+    the resulting verdict for the window; the backend forwards it to the stateful
+    :class:`~alerting.engine.AlertEngine` (exactly as it already forwards the
+    detection decision). No per-sample state is kept in FastAPI.
+
+    ``healthy`` must be consistent with ``stuck_channels`` (healthy iff empty); the
+    AlertEngine rejects an inconsistent verdict.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    healthy: bool
+    fault_type: str | None = None
+    reason: str | None = None
+    timestamp: str | None = None
+    stuck_channels: list[ChannelHealthModel] = Field(default_factory=list)
+
+
 class ScoreRequest(BaseModel):
     """One complete ``window x features`` telemetry window to score.
 
     The caller owns the rolling buffer (Phase 2A ``RollingWindow``); this request
     is a single fully-formed window. No streaming state is kept between requests.
+
+    ``telemetry_health`` is optional (Phase 6B): when the caller runs the
+    stuck-channel monitor it may attach the window's health verdict, which the
+    backend forwards to the alert engine. It never affects scoring.
     """
 
     model_config = ConfigDict(extra="forbid")  # reject unknown top-level fields
@@ -49,6 +85,11 @@ class ScoreRequest(BaseModel):
         None,
         description="Optional timestamp of the window's last (scored) sample "
         "(echoed back).",
+    )
+    telemetry_health: TelemetryHealthPayload | None = Field(
+        None,
+        description="Optional client-computed stuck-channel verdict for this "
+        "window; forwarded to the alert engine, never used for scoring.",
     )
 
     @model_validator(mode="after")
@@ -139,7 +180,9 @@ class AlertModel(BaseModel):
     """
 
     alert_id: str
-    category: str
+    category: str = Field(
+        ..., description="PROCESS_ANOMALY (TranAD) or TELEMETRY_FAULT (stuck channel)."
+    )
     status: str
     severity: str
     is_anomaly: bool
@@ -153,6 +196,17 @@ class AlertModel(BaseModel):
     window_count: int
     top_features: list[FeatureError] = Field(
         ..., description="Peak window's top-N per-feature contributions (from the detector)."
+    )
+    # Telemetry-fault fields (Phase 6B): populated only for TELEMETRY_FAULT alerts.
+    affected_channels: list[str] = Field(
+        default_factory=list,
+        description="Stuck channel(s) for a TELEMETRY_FAULT; empty for PROCESS_ANOMALY.",
+    )
+    reason: str | None = Field(
+        None, description="Human-readable cause for a TELEMETRY_FAULT (e.g. STUCK_CHANNEL: ...)."
+    )
+    staleness_seconds: float | None = Field(
+        None, description="How long the channel has been frozen (TELEMETRY_FAULT only)."
     )
 
 
@@ -182,9 +236,18 @@ class StatusResponse(BaseModel):
     last_anomaly_score: float | None = None
     last_is_anomaly: bool | None = None
     last_window_end: str | None = None
-    # Alert rollup.
+    # Alert rollup. active/total counts span BOTH categories; the telemetry rollup
+    # is broken out so an operator view can distinguish process anomalies from
+    # telemetry faults.
     active_alert_count: int = 0
     total_alert_count: int = 0
+    active_telemetry_fault_count: int = Field(
+        0, description="Currently-open TELEMETRY_FAULT incidents (one per stuck channel)."
+    )
+    telemetry_fault_channels: list[str] = Field(
+        default_factory=list,
+        description="Channels currently flagged as stuck (empty when telemetry is healthy).",
+    )
     alert_state_in_memory: bool = Field(
         True,
         description="Alert state lives in memory only and is lost on restart (no DB yet).",

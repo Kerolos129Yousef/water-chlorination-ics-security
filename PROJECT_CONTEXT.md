@@ -146,6 +146,9 @@ closure). This records what is actually built and tested in the repository.
 | Phase 3 | End-to-end integration: replay → window → HTTP `/score` → TranAD (`simulator/pipeline.py`, `scripts/run_e2e_demo.py`) | **COMPLETE** |
 | Phase 4 | Alert engine: detection decisions → deduplicated, lifecycle-managed alerts (`alerting/`) | **COMPLETE** |
 | Phase 5A | Monitoring API (`/status`, `/alerts`, `/alerts/active`) + minimal operator dashboard (`frontend/`) | **COMPLETE** |
+| Phase 6A | Telemetry / sensor-health hardening: stuck/frozen continuous-channel detection at the ingest layer (`simulator/telemetry_health.py`), distinct from ML anomalies | **COMPLETE** |
+| Phase 6B | Telemetry fault surfacing / operator visibility: `TELEMETRY_FAULT` incidents in the `AlertEngine` (second track), monitoring API + dashboard, distinct from and coexisting with `PROCESS_ANOMALY` | **COMPLETE** |
+| Phase 7 | Alert persistence: durable `AlertStore` behind the `AlertEngine` (`InMemoryAlertStore` default, `SQLiteAlertStore` opt-in), restart recovery of active incidents + history for both categories | **COMPLETE** |
 
 **Actual implementation order:** Phase 2A (SWaT replay + rolling window) was
 built **before** Phase 2B (FastAPI backend). This differs from the numbered
@@ -195,11 +198,57 @@ vanilla HTML/JS, polling) consumes only the API. Explicit dev CORS
 on backend restart — no database in this phase (deferred, to be evaluated with
 persistence).**
 
-Full test suite: **286 tests passing** (`pytest -q`), including 22 backend API
-cases, 15 monitoring-API cases, 12 Phase 3 end-to-end integration cases, and 21
-Phase 4 alert-engine cases.
+**Phase 6A adds telemetry / sensor-health hardening**: a `TelemetryHealthMonitor`
+(`simulator/telemetry_health.py`) at the ingest layer, alongside `RollingWindow`,
+that detects *finite-but-stuck* continuous sensor channels (a value bit-identical
+for `max_unchanged_samples` consecutive samples). It resolves provenance §7 open
+item 4. Deliberately separate from TranAD: it is read-only (never forward-fills,
+repairs, or suppresses the ML input), imports only numpy, and emits an explicit
+`TELEMETRY_FAULT` / `STUCK_CHANNEL` signal that stays distinguishable from an ML
+`PROCESS_ANOMALY` (both can be present on one window). Only continuous sensors
+(`FIT/LIT/AIT/DPIT/PIT`) are monitored by default; discrete actuators (`MV/P/UV`)
+legitimately hold state and are excluded. The default `max_unchanged_samples=2880`
+(4 h at the 5 s cadence) is **measured zero-false-positive** on the normal SWaT
+slice (see `docs/provenance/phase6a_telemetry_health.md`). By design this is NOT
+wired into the thin, stateless FastAPI layer — per-sample stream state stays at
+the ingest layer. `run_pipeline` accepts an optional `health_monitor` and carries
+the verdict on `EndToEndResult.telemetry_health`.
 
-Not started (explicitly out of scope): persistence/database, Docker, AWS,
+**Phase 6B surfaces telemetry faults to operators** without changing the detector.
+The `AlertEngine` gains a *second, independent track*: `process_health()` turns a
+`TelemetryHealthResult` into deduplicated, lifecycle-managed `TELEMETRY_FAULT`
+incidents (one per stuck channel; open on staleness, dedup while stuck, close on
+the deterministic recovery rule). This is kept semantically separate from
+`PROCESS_ANOMALY` — the two can coexist on the same period and never merge. The
+Phase 4 ML single-active-slot machine is unchanged; FastAPI stays stateless (the
+client attaches the per-window health verdict to the existing `/score` request and
+the backend only *forwards* it to the engine). The monitoring API adds a `/status`
+telemetry rollup, a `category` filter on `/alerts`, and telemetry fields on
+`AlertModel`; `/alerts/active` stays ML-only. The dashboard adds a telemetry-faults
+card + history and a system-status rollup, in the existing visual language. Alert
+state remains **in-memory only** (no persistence). Detection threshold unchanged
+(2880). See `docs/provenance/phase6b_telemetry_fault_alerting.md`.
+
+**Phase 7 makes alert state durable** without changing any lifecycle semantics. A
+small `AlertStore` interface sits *behind* the `AlertEngine`: `InMemoryAlertStore`
+(default — identical to prior behaviour) and `SQLiteAlertStore` (opt-in, a single
+local file, no server). The engine still owns every lifecycle decision and now
+writes each result through to the store; on construction it recovers the active
+`PROCESS_ANOMALY` slot, the per-channel `TELEMETRY_FAULT` incidents, the combined
+history, and the id counters — so a restart resumes the exact lifecycle, minting no
+duplicate incidents or ids. FastAPI stays stateless (persistence is entirely behind
+the engine). Configured via `ALERT_STORAGE_BACKEND=memory|sqlite` +
+`ALERT_DB_PATH`; runtime `*.sqlite3` files are git-ignored. API/dashboard contracts
+are byte-compatible. SQLite is the MVP backend and is replaceable by PostgreSQL
+behind the same interface with no engine change. See
+`docs/provenance/phase7_alert_persistence.md`.
+
+Full test suite: **381 tests passing** (`pytest -q`), including 22 backend API
+cases, 15 monitoring-API cases, 12 Phase 3 end-to-end integration cases, 21
+Phase 4 alert-engine cases, 34 Phase 6A telemetry-health cases, 31 Phase 6B
+telemetry-fault cases, and 30 Phase 7 persistence cases (19 store + 11 restart).
+
+Not started (explicitly out of scope): PostgreSQL/cloud persistence, Docker, AWS,
 Terraform, Kubernetes, CI/CD, notifications, authentication.
 
 ---

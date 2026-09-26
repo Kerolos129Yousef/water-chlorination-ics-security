@@ -19,6 +19,7 @@ from .pipeline import (
     EndToEndResult,
     HttpScorer,
     Scorer,
+    health_to_request_payload,
     run_pipeline,
     window_to_request,
 )
@@ -28,6 +29,15 @@ from .swat_replay import (
     ReplayError,
     SWaTReplay,
     TelemetryRecord,
+)
+from .telemetry_health import (
+    DEFAULT_MAX_UNCHANGED_SAMPLES,
+    ChannelHealth,
+    TelemetryHealthError,
+    TelemetryHealthMonitor,
+    TelemetryHealthResult,
+    classify_feature,
+    continuous_features,
 )
 from .window_buffer import RollingWindow, Window, WindowBufferError
 
@@ -43,7 +53,16 @@ __all__ = [
     # Phase 3 end-to-end integration (producer/client side)
     "run_pipeline",
     "window_to_request",
+    "health_to_request_payload",
     "EndToEndResult",
     "Scorer",
     "HttpScorer",
+    # Phase 6A telemetry / sensor-health monitoring (ingest layer)
+    "TelemetryHealthMonitor",
+    "TelemetryHealthResult",
+    "ChannelHealth",
+    "TelemetryHealthError",
+    "classify_feature",
+    "continuous_features",
+    "DEFAULT_MAX_UNCHANGED_SAMPLES",
 ]

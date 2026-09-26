@@ -142,9 +142,14 @@ def test_alert_serialization_is_stable(client, attack_body):
         "alert_id", "category", "status", "severity", "is_anomaly",
         "anomaly_score", "threshold", "detected_at", "window_start",
         "window_end", "opened_at", "closed_at", "window_count", "top_features",
+        # Phase 6B telemetry-fault fields (present on every alert; empty/None here).
+        "affected_channels", "reason", "staleness_seconds",
     }
     assert set(alert) == expected_keys
     assert alert["category"] == "PROCESS_ANOMALY"
+    # A process anomaly carries no telemetry-fault detail.
+    assert alert["affected_channels"] == []
+    assert alert["staleness_seconds"] is None
     assert alert["severity"] in {"LOW", "MEDIUM", "HIGH"}     # heuristic band
     assert isinstance(alert["top_features"], list) and len(alert["top_features"]) == 5
     assert set(alert["top_features"][0]) == {"feature", "error"}

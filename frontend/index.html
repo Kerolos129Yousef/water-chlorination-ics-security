@@ -38,7 +38,10 @@
   .badge { display:inline-block; padding:2px 10px; border-radius:6px; font-weight:700; font-size:12px; }
   .badge.normal { background:rgba(46,160,67,.15); color:var(--ok); }
   .badge.anomaly { background:rgba(248,81,73,.15); color:var(--bad); }
+  .badge.telemetry { background:rgba(210,153,34,.15); color:var(--warn); }
   .sev-LOW { color:var(--ok); } .sev-MEDIUM { color:var(--warn); } .sev-HIGH { color:var(--bad); }
+  .chip { display:inline-block; padding:1px 8px; margin:2px 4px 2px 0; border-radius:6px;
+          background:rgba(210,153,34,.15); color:var(--warn); font-weight:600; font-size:12px; }
   .muted { color:var(--muted); }
   .empty { color:var(--muted); font-style:italic; padding:8px 0; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -73,6 +76,7 @@
     <div class="row"><span class="k">Detector</span><span class="v" id="sysDetector">—</span></div>
     <div class="row"><span class="k">Model</span><span class="v" id="sysModel">—</span></div>
     <div class="row"><span class="k">Threshold</span><span class="v" id="sysThreshold">—</span></div>
+    <div class="row"><span class="k">Telemetry faults</span><span class="v" id="sysTelemetry">—</span></div>
     <div class="row"><span class="k">Alert state</span><span class="v muted" id="sysPersist">—</span></div>
   </div>
 
@@ -86,22 +90,34 @@
     <div class="spark" id="spark" title="recent anomaly scores"></div>
   </div>
 
-  <!-- 3. Active alert -->
+  <!-- 3. Active alert (PROCESS_ANOMALY) -->
   <div class="card">
-    <h2>Active alert</h2>
+    <h2>Active process anomaly</h2>
     <div id="activeAlert"><div class="empty">No active alerts.</div></div>
   </div>
 
-  <!-- 4. Alert history -->
+  <!-- 4. Telemetry faults (TELEMETRY_FAULT) -->
+  <div class="card">
+    <h2>Telemetry / sensor faults</h2>
+    <div id="telemetryFaults"><div class="empty">All monitored channels healthy.</div></div>
+  </div>
+
+  <!-- 5. Process-anomaly history -->
   <div class="card" style="grid-column:1 / -1;">
-    <h2>Alert history</h2>
+    <h2>Process-anomaly history</h2>
     <div id="alertHistory"><div class="empty">No alerts yet.</div></div>
+  </div>
+
+  <!-- 6. Telemetry-fault history -->
+  <div class="card" style="grid-column:1 / -1;">
+    <h2>Telemetry-fault history</h2>
+    <div id="telemetryHistory"><div class="empty">No telemetry faults yet.</div></div>
   </div>
 </div>
 
 <footer>
   Polling <code id="cfgApi"></code> every <span id="cfgPoll"></span> ms.
-  Alert state is <b>in-memory only</b> and resets when the backend restarts (no database in this phase).
+  Alert-state durability is shown above (SQLite-backed alerts survive a backend restart; the in-memory default does not).
   Severity is an engineering heuristic (score ÷ threshold), not an ML prediction.
 </footer>
 
@@ -142,7 +158,15 @@
     $("sysDetector").innerHTML = badge(detOk, detOk ? "loaded" : "unavailable");
     $("sysModel").textContent = s.model_type || "—";
     $("sysThreshold").textContent = fmt(s.threshold);
-    $("sysPersist").textContent = s.alert_state_in_memory ? "in-memory (resets on restart)" : "—";
+    const tf = s.active_telemetry_fault_count || 0;
+    const chans = (s.telemetry_fault_channels || []).join(", ");
+    const tEl = $("sysTelemetry");
+    tEl.innerHTML = tf > 0
+      ? `<span class="badge telemetry">${tf} active</span> <span class="muted">${esc(chans)}</span>`
+      : `<span class="badge normal">healthy</span>`;
+    $("sysPersist").textContent = s.alert_state_in_memory
+      ? "in-memory (resets on restart)"
+      : "durable (survives restart)";
 
     const anomaly = s.last_is_anomaly === true;
     $("detScore").textContent = s.last_anomaly_score == null ? "—" : fmt(s.last_anomaly_score);
@@ -213,17 +237,63 @@
       <tbody>${rows}</tbody></table>`;
   }
 
+  // TELEMETRY_FAULT is a distinct category — never an ML anomaly. Rendered
+  // separately so an operator can tell a stuck sensor from a process anomaly.
+  function channelsOf(a) { return (a.affected_channels || []).map(esc).join(", ") || "—"; }
+
+  function renderTelemetryFaults(faults) {
+    const el = $("telemetryFaults");
+    const active = (faults || []).filter((a) => a.status === "OPEN");
+    if (!active.length) {
+      el.innerHTML = '<div class="empty">All monitored channels healthy.</div>'; return;
+    }
+    el.innerHTML = active.map((a) => `
+      <div style="padding-bottom:10px;margin-bottom:8px;border-bottom:1px dashed var(--edge)">
+        <div class="row"><span class="k">Channel(s)</span><span class="v"><span class="chip">${channelsOf(a)}</span></span></div>
+        <div class="row"><span class="k">Status</span><span class="v"><span class="badge telemetry">${esc(a.status)}</span></span></div>
+        <div class="row"><span class="k">Frozen for</span><span class="v">${a.staleness_seconds == null ? "—" : esc(a.staleness_seconds) + " s"}</span></div>
+        <div class="row"><span class="k">Observations</span><span class="v">${a.window_count}</span></div>
+        <div class="row"><span class="k">Opened</span><span class="v">${esc(a.opened_at || a.detected_at || "—")}</span></div>
+        <div class="muted">${esc(a.reason || "STUCK_CHANNEL")}</div>
+      </div>`).join("");
+  }
+
+  function renderTelemetryHistory(faults) {
+    const el = $("telemetryHistory");
+    if (!faults || !faults.length) {
+      el.innerHTML = '<div class="empty">No telemetry faults yet.</div>'; return;
+    }
+    const rows = faults.map((a) => `
+      <tr>
+        <td>${esc(a.alert_id)}</td>
+        <td><span class="badge ${a.status === "OPEN" ? "telemetry" : "normal"}">${esc(a.status)}</span></td>
+        <td><span class="chip">${channelsOf(a)}</span></td>
+        <td>${a.staleness_seconds == null ? "—" : esc(a.staleness_seconds) + " s"}</td>
+        <td>${a.window_count}</td>
+        <td>${esc(a.opened_at || a.detected_at || "—")}</td>
+        <td>${esc(a.closed_at || "—")}</td>
+      </tr>`).join("");
+    el.innerHTML = `<table>
+      <thead><tr><th>ID</th><th>Status</th><th>Channel(s)</th><th>Frozen for</th><th>Observations</th><th>Opened</th><th>Closed</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
   async function tick() {
     try {
       const [status, active, alerts] = await Promise.all([
         getJSON("/status"),
         getJSON("/alerts/active"),
-        getJSON("/alerts?limit=20"),
+        getJSON("/alerts?limit=50"),
       ]);
       setConn(true);
       renderStatus(status);
       renderActive(active);
-      renderHistory(alerts);
+      // Split the unified history by category so each track reads cleanly.
+      const anomalies = alerts.filter((a) => a.category !== "TELEMETRY_FAULT");
+      const faults = alerts.filter((a) => a.category === "TELEMETRY_FAULT");
+      renderHistory(anomalies);
+      renderTelemetryFaults(faults);
+      renderTelemetryHistory(faults);
       $("lastUpdate").textContent = "updated " + new Date().toLocaleTimeString();
     } catch (err) {
       setConn(false);            // graceful: banner + keep last known render

@@ -5,7 +5,7 @@ HTML/CSS/JS, no framework, no npm). It talks **only** to the backend API by
 polling — it contains no detection or alert logic.
 
 ```
-frontend (poll) ──▶ backend API (/status, /alerts/active, /alerts) ──▶ AlertEngine + TranAD state
+frontend (poll) ──▶ backend API (/status, /alerts/active, /alerts[?category=…]) ──▶ AlertEngine + TranAD state
 ```
 
 ## Run (dashboard served separately from the API — the dev model)
@@ -39,10 +39,11 @@ e.g. `http://127.0.0.1:5500/?api=http://127.0.0.1:8000&poll=1000`
 
 ## What it shows
 
-1. **System status** — backend status, detector loaded/unavailable, model = TranAD, threshold.
+1. **System status** — backend status, detector loaded/unavailable, model = TranAD, threshold, and a **telemetry-fault rollup** (`N active` + stuck channel names, or `healthy`).
 2. **Detection status** — latest window's anomaly score, threshold, NORMAL/ANOMALY decision, window end, plus a small score sparkline.
-3. **Active alert** — id, status, heuristic severity, peak score, threshold, opened time, window span, window count, top contributing features.
-4. **Alert history** — recent alerts with status, severity, peak score, window count, opened/closed times.
+3. **Active process anomaly** — id, status, heuristic severity, peak score, threshold, opened time, window span, window count, top contributing features.
+4. **Telemetry / sensor faults** (Phase 6B) — each active `TELEMETRY_FAULT` with its affected channel(s), how long it has been frozen, observation count, opened time, and reason. A stuck sensor is shown as a **distinct category**, never as an ML anomaly.
+5. **Process-anomaly history** and **Telemetry-fault history** — the unified `/alerts` list split by `category` so each track reads cleanly (status, channels/severity, times).
 
 ## Live updates
 
