@@ -1,0 +1,47 @@
+# Keep the build context small AND keep non-runtime material out of images.
+# Defense-in-depth: the Dockerfiles already COPY only runtime paths, but this
+# guarantees the dataset, tests, and dev tooling can never enter an image layer.
+
+# VCS / envs / caches
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ipynb_checkpoints
+
+# Datasets and archives (NEVER in an image)
+*.csv
+*.zip
+*.rar
+*.parquet
+
+# Runtime persistence (never bake a DB into the image)
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite
+*.db
+.env
+
+# Non-runtime source and docs
+tests/
+research/
+scripts/
+docs/
+infrastructure/
+.github/
+*.pdf
+*.md
+PROJECT_CONTEXT.md
+PROJECT_HANDOFF.md
+
+# ML material not needed at inference time (detector reads threshold.json only)
+ml/configs/
+ml/requirements*.txt
+ml/README.md
+
+# Docker meta itself
+docker-compose*.yml

@@ -24,6 +24,15 @@ pip install -r backend/requirements.txt
 uvicorn backend.app:app --reload      # http://127.0.0.1:8000/docs  (OpenAPI UI)
 ```
 
+Or run it containerized (Phase 8A) — same `uvicorn backend.app:app`, CPU-only,
+non-root, with SQLite persisted to a volume:
+
+```bash
+docker compose up --build -d          # backend :8000, dashboard :8080
+```
+
+See `docs/provenance/phase8a_docker.md` for the image/hardening details.
+
 ## Endpoints
 
 ### `GET /health`

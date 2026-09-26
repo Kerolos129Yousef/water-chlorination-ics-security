@@ -1,0 +1,25 @@
+# Pinned RUNTIME dependency manifest for the backend container image (Phase 8A).
+#
+# Single source of truth for what goes into the production image. It is the
+# runtime subset of ml/requirements.txt + backend/requirements.txt, with the
+# test-only tools (httpx, pytest) deliberately EXCLUDED so they never reach the
+# runtime layer (requirement: no development-only dependencies in the image).
+#
+# Versions are pinned exactly to the verified Phase 0-7 environment so the image
+# is byte-reproducible against the golden-vector fixtures. Do not loosen a pin
+# without re-running the golden tests -- see ml/requirements.txt for the full
+# rationale behind the torch / numpy / scikit-learn pins.
+#
+# torch is installed from the CPU wheel index in the Dockerfile
+# (--index-url https://download.pytorch.org/whl/cpu), which resolves this pin to
+# the 2.9.1+cpu build (~200 MB instead of the ~2.5 GB CUDA default).
+
+# --- ML inference core (mirrors ml/requirements.txt) ---
+scikit-learn==1.7.2
+numpy==2.2.6
+torch==2.9.1
+joblib==1.5.3
+
+# --- API layer (runtime subset of backend/requirements.txt) ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.4

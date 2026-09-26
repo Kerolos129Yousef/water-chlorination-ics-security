@@ -1,0 +1,62 @@
+# Phase 8A - Local reproducible deployment of the CURRENT application.
+#
+#   docker compose up --build          # build + start backend (:8000) + dashboard (:8080)
+#   docker compose down                # stop (keeps the alert-data volume)
+#   docker compose down -v             # stop AND wipe persisted alerts
+#
+# SQLite persists to the named volume `alert-data`; it survives `down`/restart.
+# No PostgreSQL, no dataset: this is packaging + local deployment only.
+name: ics-guardian
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    image: ics-guardian-backend:phase8a
+    environment:
+      # Durable persistence, explicit (requirement of this phase).
+      ALERT_STORAGE_BACKEND: sqlite
+      ALERT_DB_PATH: /data/alerts.sqlite3
+    ports:
+      - "8000:8000"
+    volumes:
+      # Runtime DB lives OUTSIDE the immutable image layer, in a named volume.
+      - alert-data:/data
+    # Hardening: immutable root filesystem; only /data (volume) and /tmp writable.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    image: ics-guardian-frontend:phase8a
+    ports:
+      # Dashboard on :8080 -> backend CORS already allows this origin.
+      - "8080:80"
+    depends_on:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  # Durable alert store. `docker compose down` keeps it; `down -v` removes it.
+  alert-data:

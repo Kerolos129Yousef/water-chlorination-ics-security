@@ -149,6 +149,7 @@ closure). This records what is actually built and tested in the repository.
 | Phase 6A | Telemetry / sensor-health hardening: stuck/frozen continuous-channel detection at the ingest layer (`simulator/telemetry_health.py`), distinct from ML anomalies | **COMPLETE** |
 | Phase 6B | Telemetry fault surfacing / operator visibility: `TELEMETRY_FAULT` incidents in the `AlertEngine` (second track), monitoring API + dashboard, distinct from and coexisting with `PROCESS_ANOMALY` | **COMPLETE** |
 | Phase 7 | Alert persistence: durable `AlertStore` behind the `AlertEngine` (`InMemoryAlertStore` default, `SQLiteAlertStore` opt-in), restart recovery of active incidents + history for both categories | **COMPLETE** |
+| Phase 8A | Docker containerization: reproducible CPU-only, non-root, read-only backend image + static dashboard image, `docker-compose` local deployment, SQLite persisted to a named volume (survives restart). No semantic change; no PostgreSQL; dataset excluded from images (`docker/`, `docker-compose.yml`, `docs/provenance/phase8a_docker.md`) | **COMPLETE** |
 
 **Actual implementation order:** Phase 2A (SWaT replay + rolling window) was
 built **before** Phase 2B (FastAPI backend). This differs from the numbered
@@ -243,12 +244,28 @@ are byte-compatible. SQLite is the MVP backend and is replaceable by PostgreSQL
 behind the same interface with no engine change. See
 `docs/provenance/phase7_alert_persistence.md`.
 
-Full test suite: **381 tests passing** (`pytest -q`), including 22 backend API
-cases, 15 monitoring-API cases, 12 Phase 3 end-to-end integration cases, 21
-Phase 4 alert-engine cases, 34 Phase 6A telemetry-health cases, 31 Phase 6B
-telemetry-fault cases, and 30 Phase 7 persistence cases (19 store + 11 restart).
+**Phase 8A packages the current application in Docker** with no functional change.
+A multi-stage `python:3.10-slim` backend image runs the same
+`uvicorn backend.app:app` CPU-only as non-root (uid 10001) on a read-only root
+filesystem; only the `alert-data` named volume (`/data`) and a `/tmp` tmpfs are
+writable, so the SQLite DB (`ALERT_DB_PATH=/data/alerts.sqlite3`,
+`ALERT_STORAGE_BACKEND=sqlite`) lives outside the immutable image and survives
+container restarts. A tiny `nginx:alpine` image serves the unchanged zero-build
+dashboard on `:8080` (the backend already CORS-allows that origin). The SWaT
+dataset is never baked into any image; the production API starts from the 768 KB
+immutable artifacts alone, while SWaT replay/evaluation stays a separate research
+path. `docker compose up --build` runs the stack locally. No PostgreSQL yet
+(Phase 8B). See `docs/provenance/phase8a_docker.md`.
 
-Not started (explicitly out of scope): PostgreSQL/cloud persistence, Docker, AWS,
+Full test suite: **386 tests passing** (`pytest -q`) — the 381 Phase 0–7 cases
+(22 backend API, 15 monitoring-API, 12 Phase 3 end-to-end, 21 Phase 4
+alert-engine, 34 Phase 6A telemetry-health, 31 Phase 6B telemetry-fault, 30
+Phase 7 persistence) plus 5 Phase 8A Docker-packaging validation cases. The Phase
+8A container was additionally exercised with a real `docker compose` smoke test
+(build → health → `/score` → both alert categories persisted across a backend
+restart → dashboard reachable → clean shutdown).
+
+Not started (explicitly out of scope): PostgreSQL/cloud persistence, AWS,
 Terraform, Kubernetes, CI/CD, notifications, authentication.
 
 ---

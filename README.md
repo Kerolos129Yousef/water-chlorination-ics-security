@@ -37,9 +37,11 @@ Currently implemented and tested:
 - **Monitoring API** — read-only `/status`, `/alerts`, `/alerts/active` over the in-memory alert state.
 - **Operator dashboard** — zero-build, vanilla HTML/JS, polls the API only (`frontend/index.html`).
 - **End-to-end demo** — normal / attack / recovery flow over a real HTTP boundary (`scripts/run_e2e_demo.py`).
-- **286 automated tests** passing (`pytest`).
+- **Alert persistence** — durable `SQLiteAlertStore` behind the engine; active incidents + history survive a restart (`alerting/store.py`).
+- **Docker deployment (Phase 8A)** — reproducible CPU-only, non-root, read-only backend image + static dashboard image, `docker compose up` local stack, SQLite persisted to a named volume (`docker/`, `docker-compose.yml`).
+- **386 automated tests** passing (`pytest`).
 
-> Docker, AWS, Terraform, Kubernetes, CI/CD, DevSecOps security gates, authentication, and alert persistence are **not implemented** in the current repository. They are tracked in the [roadmap](#14-project-roadmap).
+> AWS, Terraform, Kubernetes, CI/CD, DevSecOps security gates, authentication, and a networked (PostgreSQL) database are **not implemented** in the current repository. They are tracked in the [roadmap](#14-project-roadmap).
 
 ---
 
@@ -276,6 +278,26 @@ curl -s http://127.0.0.1:8000/status     # system + detector + alert rollup
 
 Interactive API docs (Swagger UI): open **http://127.0.0.1:8000/docs**.
 
+### Docker (reproducible local deployment — Phase 8A)
+
+Run the whole stack in containers instead of the manual setup above:
+
+```bash
+docker compose up --build -d      # backend :8000 + dashboard :8080
+# open http://127.0.0.1:8080      (dashboard defaults to the API on :8000)
+docker compose ps                 # both services should be "healthy"
+docker compose down               # stop (keeps persisted alerts)
+# docker compose down -v          # stop AND wipe the alert-data volume
+```
+
+The backend image is CPU-only, non-root (uid 10001), runs on a read-only root
+filesystem, and persists alerts to SQLite in the named `alert-data` volume
+(`ALERT_STORAGE_BACKEND=sqlite`, `ALERT_DB_PATH=/data/alerts.sqlite3`), so alerts
+survive a container restart. The **SWaT dataset is not baked into the image** —
+the API starts from the immutable `ml/artifacts/` alone; replay/evaluation stays
+a separate local path. Full design, hardening, and smoke-test evidence:
+`docs/provenance/phase8a_docker.md`.
+
 ---
 
 ## 10. Running the End-to-End Demo
@@ -362,7 +384,7 @@ Each of `ml/`, `simulator/`, `backend/`, `alerting/`, `frontend/` carries its ow
 .venv/bin/python -m pytest        # or: pytest
 ```
 
-**Current verified count: 286 tests passing.** The suite covers preprocessing, the TranAD model and scoring, the detector, golden-vector parity, the SWaT replay and rolling window, the backend API, the monitoring API, the alert engine, and the Phase 3 end-to-end integration. Tests that require the licensed dataset are guarded; the golden-vector fixtures are committed so ML inference parity is testable without the raw CSVs.
+**Current verified count: 386 tests passing.** The suite covers preprocessing, the TranAD model and scoring, the detector, golden-vector parity, the SWaT replay and rolling window, the backend API, the monitoring API, the alert engine, telemetry-health / telemetry-fault handling, alert persistence (store + restart recovery), the Phase 3 end-to-end integration, and static Docker-packaging validation. Tests that require the licensed dataset are guarded; the golden-vector fixtures are committed so ML inference parity is testable without the raw CSVs.
 
 ---
 
@@ -370,15 +392,13 @@ Each of `ml/`, `simulator/`, `backend/`, `alerting/`, `frontend/` carries its ow
 
 ### Currently implemented
 
-TranAD inference library, SWaT replay + rolling window, thin FastAPI backend, end-to-end integration, alert engine (in-memory), monitoring API, operator dashboard, 286 tests — see [Key Features](#2-key-features) and [MVP Status](#8-mvp-status).
+TranAD inference library, SWaT replay + rolling window, thin FastAPI backend, end-to-end integration, alert engine with telemetry-fault track, durable SQLite alert persistence, monitoring API, operator dashboard, Docker containerization (backend + dashboard, `docker compose`), 386 tests — see [Key Features](#2-key-features) and [MVP Status](#8-mvp-status).
 
 ### Future work (planned / not yet implemented)
 
 | Item | Notes |
 |---|---|
-| Stuck-channel detection | Operational-fault handling for absent/frozen channels |
-| Alert persistence / database | Replace in-memory alert state with durable storage |
-| Docker | Containerize backend + dashboard |
+| PostgreSQL alert store | Networked DB behind the same `AlertStore` interface (Phase 8B) |
 | CI/CD | Automated build/test pipeline |
 | SAST | Static application security testing gate |
 | Dependency scanning | Supply-chain vulnerability scanning |
@@ -402,9 +422,9 @@ These are current, documented characteristics — not bugs unless noted:
 
 - **~150-second context fill.** The model needs a full 30-sample window (≈150 s) before it can score; that is also the detection-latency floor.
 - **~3% false-positive rate** under the current point-wise evaluation, driven by the documented threshold-calibration caveat (6 of 45 features frozen on the calibration split). Surfaced honestly; not silently corrected.
-- **In-memory alert state.** Alerts are lost on backend restart — no database yet.
+- **Local SQLite persistence.** Alerts survive a restart via `SQLiteAlertStore` (single-writer, local file/volume); a networked PostgreSQL backend is Phase 8B. The in-memory store remains the default for un-configured callers.
 - **No authentication** on the API or dashboard yet.
-- **No cloud deployment** yet (no Docker/AWS/Terraform/Kubernetes).
+- **Local containers only.** Docker/`docker compose` deployment exists (Phase 8A); no cloud deployment yet (no AWS/Terraform/Kubernetes).
 - **No CI/CD security gates** yet.
 - **Demo auto-selection caveat.** In attack mode without `--attack-segment`, the auto-selection probing scores windows through the live endpoint and can perturb in-memory alert state — pass an explicit segment for a clean manual demo (see [§10](#10-running-the-end-to-end-demo)).
 
