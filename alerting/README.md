@@ -106,6 +106,11 @@ AlertEngine (lifecycle) ──write-through──▶ AlertStore ──▶ query(
 - **`SQLiteAlertStore`** — a single local file (auto-created), durable across
   restarts. One table, single-row `ON CONFLICT DO UPDATE` upserts (atomic, open
   order preserved), indexed on `status`/`category`.
+- **`PostgreSQLAlertStore`** (Phase 8B) — the *same* schema and semantics on a
+  PostgreSQL server, for a future multi-instance/cloud deployment. `psycopg` 3 with
+  a connection pool (imported lazily, so memory/sqlite never require it); JSONB for
+  the list columns, `seq BIGSERIAL` for open order, indexed on `seq`/`status`/
+  `category`. See `docs/provenance/phase8b_postgres_alertstore.md`.
 
 **Restart recovery:** a fresh engine on the same store re-adopts the open
 `PROCESS_ANOMALY`, the per-channel `TELEMETRY_FAULT` incidents, and the history, and
@@ -114,10 +119,13 @@ duplicate incident or id is minted. `engine.alerts` reads the store;
 `engine.active_alert` / `engine.active_telemetry_faults` are the live recovered
 pointers.
 
-**Config:** `ALERT_STORAGE_BACKEND=memory|sqlite`, `ALERT_DB_PATH=…` (via
-`alert_store_from_env()`). SQLite is the MVP backend — replaceable by PostgreSQL
-behind the same interface with **no** change to engine semantics. Runtime DB files
-are git-ignored. See `docs/provenance/phase7_alert_persistence.md`.
+**Config:** `ALERT_STORAGE_BACKEND=memory|sqlite|postgres` (via
+`alert_store_from_env()`) — `ALERT_DB_PATH=…` for sqlite; `ALERT_PG_DSN` or the
+`POSTGRES_*` parts for postgres (credentials from the environment, never source).
+SQLite is the single-node MVP backend; PostgreSQL (Phase 8B) is the same interface
+on a server, with **no** change to engine semantics. Runtime DB files are
+git-ignored. See `docs/provenance/phase7_alert_persistence.md` and
+`docs/provenance/phase8b_postgres_alertstore.md`.
 
 ## Severity — engineering heuristic, not a prediction
 
@@ -177,8 +185,11 @@ close → history complete once), id no-collision, and the API serving recovered
 
 ## Not yet
 
-No PostgreSQL/cloud persistence (Phase 7 adds a durable **SQLite** backend behind
-the `AlertStore` interface; the default remains in-memory), notifications
-(email/SMS/Slack), acknowledgement, escalation, or paging. The monitoring API and
-dashboard that render this engine's alerts were added in Phase 5A/6B; the engine
-itself still owns only lifecycle + deduplication.
+Phase 7 added a durable **SQLite** backend and Phase 8B a **PostgreSQL** backend
+behind the `AlertStore` interface (the default remains in-memory). Still not
+implemented: **distributed multi-instance `AlertEngine` coordination** (PostgreSQL
+makes storage server-grade, but two engine processes would each keep their own
+in-memory active slot — out of scope for Phase 8B, see the phase8b doc),
+notifications (email/SMS/Slack), acknowledgement, escalation, or paging. The
+monitoring API and dashboard that render this engine's alerts were added in Phase
+5A/6B; the engine itself still owns only lifecycle + deduplication.

@@ -10,7 +10,8 @@ Boundary. This package imports no ``torch``, no FastAPI, no ``ml.src`` and no
 (``is_anomaly`` / ``anomaly_score`` / ``threshold`` / ``top_features`` /
 optional ``window_start`` / ``window_end``). Feature attribution is taken
 verbatim from the detector; severity is an explicitly-labelled engineering
-heuristic, not an ML prediction. In-memory only -- no database in this phase.
+heuristic, not an ML prediction. Durability lives behind a small ``AlertStore``
+(Phase 7 SQLite, Phase 8B PostgreSQL); the engine still owns all lifecycle logic.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from .store import (
     AlertStore,
     AlertStoreError,
     InMemoryAlertStore,
+    PostgreSQLAlertStore,
     SQLiteAlertStore,
     alert_store_from_env,
 )
@@ -49,10 +51,11 @@ __all__ = [
     "TELEMETRY_FAULT_CATEGORY",
     "MEDIUM_RATIO",
     "HIGH_RATIO",
-    # Phase 7 persistence
+    # Phase 7 persistence (Phase 8B adds PostgreSQLAlertStore)
     "AlertStore",
     "InMemoryAlertStore",
     "SQLiteAlertStore",
+    "PostgreSQLAlertStore",
     "AlertStoreError",
     "alert_store_from_env",
 ]

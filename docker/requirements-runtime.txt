@@ -23,3 +23,10 @@ joblib==1.5.3
 # --- API layer (runtime subset of backend/requirements.txt) ---
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
+
+# --- Alert persistence: PostgreSQL backend (Phase 8B) ---
+# psycopg 3 with the prebuilt binary (no libpq/compiler needed in the image) plus
+# the connection pool. Only used when ALERT_STORAGE_BACKEND=postgres; the memory
+# and sqlite backends import it lazily and never require it.
+psycopg[binary]==3.2.10
+psycopg-pool==3.2.6

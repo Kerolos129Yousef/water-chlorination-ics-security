@@ -65,6 +65,13 @@ def test_runtime_requirements_exclude_test_only_deps():
         assert pkg in deps, f"expected pinned {pkg} in runtime requirements"
 
 
+def test_runtime_requirements_include_postgres_client():
+    # Phase 8B: the image must be able to talk to PostgreSQL when selected.
+    deps = _read("docker/requirements-runtime.txt").lower()
+    assert "psycopg" in deps, "runtime image must ship psycopg for the postgres backend"
+    assert "psycopg-pool" in deps, "postgres backend uses a connection pool"
+
+
 def test_dockerignore_excludes_dataset_and_nonruntime():
     di = _read(".dockerignore")
     for pattern in ("*.csv", "tests/", "*.sqlite3", ".venv", "ml/configs/"):
@@ -82,3 +89,46 @@ def test_compose_wires_sqlite_volume_and_hardening():
     # both services published on their documented ports
     assert "8000:8000" in c
     assert "8080:80" in c
+    # the base file stays SQLite-only: the default `up` flow is unchanged.
+    assert "ALERT_STORAGE_BACKEND: postgres" not in c
+
+
+# ------------------------------------------------------ Phase 8B: postgres overlay
+
+
+def test_postgres_overlay_and_env_example_exist():
+    for rel in ("docker-compose.postgres.yml", ".env.example"):
+        assert (ROOT / rel).is_file(), f"missing {rel}"
+
+
+def test_postgres_overlay_wires_service_volume_and_healthcheck():
+    c = _read("docker-compose.postgres.yml")
+    # a postgres service with a persistent named volume + healthcheck
+    assert "postgres:" in c
+    assert "postgres-data:/var/lib/postgresql/data" in c
+    assert "pg_isready" in c
+    # backend switched to the postgres backend and waits for a HEALTHY db
+    assert "ALERT_STORAGE_BACKEND: postgres" in c
+    assert "condition: service_healthy" in c
+    assert "no-new-privileges:true" in c
+
+
+def test_postgres_overlay_commits_no_secrets():
+    c = _read("docker-compose.postgres.yml")
+    # credentials come from the environment (${...}), never literals.
+    assert "${POSTGRES_PASSWORD" in c
+    # postgres is not published to the host (internal compose network only).
+    assert "5432:5432" not in c
+
+
+def test_env_example_has_no_real_password():
+    e = _read(".env.example")
+    for var in ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"):
+        assert var in e, f".env.example should document {var}"
+    # a placeholder, not a real secret
+    assert "change-me" in e.lower()
+
+
+def test_dockerignore_excludes_env_file():
+    di = _read(".dockerignore")
+    assert ".env" in di, ".dockerignore should exclude the .env credentials file"

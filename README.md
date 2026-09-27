@@ -2,7 +2,7 @@
 
 **Platform for Protecting Water Chlorination Systems from Cyber Attacks** — an end-to-end, local OT/ICS security monitoring MVP that productionizes a TranAD process-aware anomaly detector for the SWaT water-treatment dataset.
 
-> **Status:** Graduation project. Local MVP working end-to-end (**Phase 5A — complete**). Cloud, containerization, and CI/CD security gates are **planned**, not yet implemented. See [MVP Status](#8-mvp-status) and [Roadmap](#14-project-roadmap).
+> **Status:** Graduation project. Local MVP working end-to-end, containerized (**Phase 8B — complete**): Docker/`docker compose` deployment with three interchangeable alert-persistence backends (in-memory / SQLite / PostgreSQL). Cloud, CI/CD security gates, and multi-instance coordination are **planned**, not yet implemented. See [MVP Status](#8-mvp-status) and [Roadmap](#14-project-roadmap).
 
 ---
 
@@ -37,17 +37,18 @@ Currently implemented and tested:
 - **Monitoring API** — read-only `/status`, `/alerts`, `/alerts/active` over the in-memory alert state.
 - **Operator dashboard** — zero-build, vanilla HTML/JS, polls the API only (`frontend/index.html`).
 - **End-to-end demo** — normal / attack / recovery flow over a real HTTP boundary (`scripts/run_e2e_demo.py`).
-- **Alert persistence** — durable `SQLiteAlertStore` behind the engine; active incidents + history survive a restart (`alerting/store.py`).
+- **Alert persistence** — three interchangeable backends behind one `AlertStore` interface: in-memory (default), durable `SQLiteAlertStore`, and networked `PostgreSQLAlertStore` (Phase 8B); active incidents + history survive a restart on both durable backends (`alerting/store.py`).
 - **Docker deployment (Phase 8A)** — reproducible CPU-only, non-root, read-only backend image + static dashboard image, `docker compose up` local stack, SQLite persisted to a named volume (`docker/`, `docker-compose.yml`).
-- **386 automated tests** passing (`pytest`).
+- **PostgreSQL mode (Phase 8B)** — `docker-compose.postgres.yml` overlay adds a PostgreSQL service (persistent volume, healthcheck, env-only credentials); the backend selects it with `ALERT_STORAGE_BACKEND=postgres`.
+- **411 automated tests** passing (`pytest`), including a real-PostgreSQL integration suite.
 
-> AWS, Terraform, Kubernetes, CI/CD, DevSecOps security gates, authentication, and a networked (PostgreSQL) database are **not implemented** in the current repository. They are tracked in the [roadmap](#14-project-roadmap).
+> AWS, Terraform, Kubernetes, CI/CD, DevSecOps security gates, authentication, TLS to the database, and distributed multi-instance coordination are **not implemented** in the current repository. They are tracked in the [roadmap](#14-project-roadmap).
 
 ---
 
 ## 3. Architecture
 
-The current system is a layered pipeline with deliberately clean boundaries. The **client owns the rolling buffer**, the **detector is stateless**, the **FastAPI layer is a thin boundary**, and the **alert engine is the one intentionally stateful stage** (in-memory only).
+The current system is a layered pipeline with deliberately clean boundaries. The **client owns the rolling buffer**, the **detector is stateless**, the **FastAPI layer is a thin boundary**, and the **alert engine is the one intentionally stateful stage** — its lifecycle state is made durable behind a swappable `AlertStore` (in-memory / SQLite / PostgreSQL).
 
 ```mermaid
 flowchart TD
@@ -298,6 +299,29 @@ the API starts from the immutable `ml/artifacts/` alone; replay/evaluation stays
 a separate local path. Full design, hardening, and smoke-test evidence:
 `docs/provenance/phase8a_docker.md`.
 
+### PostgreSQL backend (Phase 8B)
+
+To run with a networked PostgreSQL database instead of SQLite, add the overlay and
+supply credentials via `.env` (the base file stays SQLite-only, so the default flow
+above is unchanged):
+
+```bash
+cp .env.example .env              # then set a strong POSTGRES_PASSWORD
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build -d
+# ... same API :8000 + dashboard :8080 ...
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml down      # keep data
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml down -v   # wipe data
+```
+
+The overlay adds a `postgres` service with a persistent named volume, a
+`pg_isready` healthcheck (the backend waits for it), and internal-only networking
+(Postgres is **not** published to the host). Credentials come from `.env`
+(git-ignored) — never source. The same `PostgreSQLAlertStore` recovers active
+incidents + history across a backend restart, and the data survives a Postgres
+container restart via its volume. It is the same `AlertStore` interface and
+`AlertEngine` semantics as SQLite — only the storage backend differs. Details:
+`docs/provenance/phase8b_postgres_alertstore.md`.
+
 ---
 
 ## 10. Running the End-to-End Demo
@@ -374,7 +398,7 @@ Response shape (see `backend/schemas.py`): `anomaly_score`, `threshold`, `is_ano
 └── docker/           # PLANNED: containerization (empty)
 ```
 
-Each of `ml/`, `simulator/`, `backend/`, `alerting/`, `frontend/` carries its own `README.md`. `docs/provenance/` is the source of truth for the model contract and metrics. `infrastructure/` and `docker/` are placeholders for planned work and contain no implementation yet.
+Each of `ml/`, `simulator/`, `backend/`, `alerting/`, `frontend/` carries its own `README.md`. `docs/provenance/` is the source of truth for the model contract and metrics. `docker/` holds the backend/frontend Dockerfiles and runtime manifest (Phase 8A); `infrastructure/` is a placeholder for planned cloud work and contains no implementation yet.
 
 ---
 
@@ -384,7 +408,7 @@ Each of `ml/`, `simulator/`, `backend/`, `alerting/`, `frontend/` carries its ow
 .venv/bin/python -m pytest        # or: pytest
 ```
 
-**Current verified count: 386 tests passing.** The suite covers preprocessing, the TranAD model and scoring, the detector, golden-vector parity, the SWaT replay and rolling window, the backend API, the monitoring API, the alert engine, telemetry-health / telemetry-fault handling, alert persistence (store + restart recovery), the Phase 3 end-to-end integration, and static Docker-packaging validation. Tests that require the licensed dataset are guarded; the golden-vector fixtures are committed so ML inference parity is testable without the raw CSVs.
+**Current verified count: 411 tests passing.** The suite covers preprocessing, the TranAD model and scoring, the detector, golden-vector parity, the SWaT replay and rolling window, the backend API, the monitoring API, the alert engine, telemetry-health / telemetry-fault handling, alert persistence across all three backends (in-memory, SQLite, and a **real-PostgreSQL** integration suite that spins up a throwaway `postgres:16-alpine` container — skipped only if Docker is unavailable), the Phase 3 end-to-end integration, and static Docker-packaging validation. Tests that require the licensed dataset are guarded; the golden-vector fixtures are committed so ML inference parity is testable without the raw CSVs.
 
 ---
 
@@ -392,13 +416,13 @@ Each of `ml/`, `simulator/`, `backend/`, `alerting/`, `frontend/` carries its ow
 
 ### Currently implemented
 
-TranAD inference library, SWaT replay + rolling window, thin FastAPI backend, end-to-end integration, alert engine with telemetry-fault track, durable SQLite alert persistence, monitoring API, operator dashboard, Docker containerization (backend + dashboard, `docker compose`), 386 tests — see [Key Features](#2-key-features) and [MVP Status](#8-mvp-status).
+TranAD inference library, SWaT replay + rolling window, thin FastAPI backend, end-to-end integration, alert engine with telemetry-fault track, alert persistence across three interchangeable backends (in-memory / SQLite / PostgreSQL), monitoring API, operator dashboard, Docker containerization (backend + dashboard, `docker compose`, SQLite and PostgreSQL modes), 411 tests — see [Key Features](#2-key-features) and [MVP Status](#8-mvp-status).
 
 ### Future work (planned / not yet implemented)
 
 | Item | Notes |
 |---|---|
-| PostgreSQL alert store | Networked DB behind the same `AlertStore` interface (Phase 8B) |
+| Distributed multi-instance coordination | Cluster-safe `AlertEngine` (e.g. `SELECT … FOR UPDATE` / leader); PostgreSQL storage is present (Phase 8B) but engine coordination is not |
 | CI/CD | Automated build/test pipeline |
 | SAST | Static application security testing gate |
 | Dependency scanning | Supply-chain vulnerability scanning |
@@ -422,9 +446,9 @@ These are current, documented characteristics — not bugs unless noted:
 
 - **~150-second context fill.** The model needs a full 30-sample window (≈150 s) before it can score; that is also the detection-latency floor.
 - **~3% false-positive rate** under the current point-wise evaluation, driven by the documented threshold-calibration caveat (6 of 45 features frozen on the calibration split). Surfaced honestly; not silently corrected.
-- **Local SQLite persistence.** Alerts survive a restart via `SQLiteAlertStore` (single-writer, local file/volume); a networked PostgreSQL backend is Phase 8B. The in-memory store remains the default for un-configured callers.
+- **Persistence: in-memory / SQLite / PostgreSQL.** Alerts survive a restart via `SQLiteAlertStore` (single-writer, local file/volume) or `PostgreSQLAlertStore` (networked server, Phase 8B); the in-memory store remains the default for un-configured callers. PostgreSQL makes storage server-grade, but **distributed multi-instance `AlertEngine` coordination is not implemented** — a single engine process is assumed. No TLS to the database / no cloud secret manager yet (credentials via env/`.env`).
 - **No authentication** on the API or dashboard yet.
-- **Local containers only.** Docker/`docker compose` deployment exists (Phase 8A); no cloud deployment yet (no AWS/Terraform/Kubernetes).
+- **Local containers only.** Docker/`docker compose` deployment exists (Phase 8A, SQLite and PostgreSQL modes); no cloud deployment yet (no AWS/Terraform/Kubernetes).
 - **No CI/CD security gates** yet.
 - **Demo auto-selection caveat.** In attack mode without `--attack-segment`, the auto-selection probing scores windows through the live endpoint and can perturb in-memory alert state — pass an explicit segment for a clean manual demo (see [§10](#10-running-the-end-to-end-demo)).
 
