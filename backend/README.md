@@ -28,10 +28,19 @@ Or run it containerized (Phase 8A) — same `uvicorn backend.app:app`, CPU-only,
 non-root, with SQLite persisted to a volume:
 
 ```bash
-docker compose up --build -d          # backend :8000, dashboard :8080
+docker compose up --build -d          # backend :8000, dashboard :8080 (SQLite)
 ```
 
-See `docs/provenance/phase8a_docker.md` for the image/hardening details.
+For the PostgreSQL backend (Phase 8B), add the overlay and a `.env`:
+
+```bash
+cp .env.example .env                  # then set POSTGRES_PASSWORD
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build -d
+```
+
+See `docs/provenance/phase8a_docker.md` and
+`docs/provenance/phase8b_postgres_alertstore.md` for image/hardening and the
+PostgreSQL backend details.
 
 ## Endpoints
 
@@ -109,13 +118,16 @@ Read-only views over the `AlertEngine` on `app.state`. The backend only drives a
 reads the engine — deduplication, lifecycle, severity, and top-feature attribution
 all live in `alerting/`, never here.
 
-**Persistence (Phase 7).** Alert state is durable *behind* the engine via an
-`AlertStore`. Configure with `ALERT_STORAGE_BACKEND=memory|sqlite` (default
-`memory`) and `ALERT_DB_PATH=…` (SQLite file; auto-created). With `sqlite`, a
-backend restart recovers active incidents (both categories) and history — the API
-serves the recovered state. The default (`memory`) keeps the old behaviour (state
-lost on restart). FastAPI itself remains stateless; runtime `*.sqlite3` files are
-git-ignored. See `docs/provenance/phase7_alert_persistence.md`.
+**Persistence (Phase 7 + 8B).** Alert state is durable *behind* the engine via an
+`AlertStore`. Configure with `ALERT_STORAGE_BACKEND=memory|sqlite|postgres` (default
+`memory`): `ALERT_DB_PATH=…` for the SQLite file (auto-created), or `ALERT_PG_DSN` /
+the `POSTGRES_*` parts for PostgreSQL (Phase 8B; credentials from the environment,
+never source). With `sqlite` or `postgres`, a backend restart recovers active
+incidents (both categories) and history — the API serves the recovered state. The
+default (`memory`) keeps the old behaviour (state lost on restart). FastAPI itself
+remains stateless; runtime `*.sqlite3` files and `.env` are git-ignored. See
+`docs/provenance/phase7_alert_persistence.md` and
+`docs/provenance/phase8b_postgres_alertstore.md`.
 
 ### `GET /status`
 System + detector + latest-detection + alert rollup. Always **200** (reports
@@ -201,4 +213,4 @@ The two 422 paths carry **deliberately distinct `detail` shapes**:
   allowed, no wildcard), unchanged `/health` + `/score` contracts, and an end-to-end
   replay → `/score` → engine → `/alerts/active` test.
 
-No dataset required. Part of the full **286-test** suite (`pytest -q`).
+No dataset required. Part of the full **411-test** suite (`pytest -q`).

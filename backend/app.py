@@ -63,10 +63,11 @@ def create_app(
     app if not injected; tests inject a fresh one for isolation. The backend never
     re-implements dedup/lifecycle/severity -- it only drives and reads this engine.
 
-    Persistence (Phase 7): when the engine is not injected, its store is selected
-    from the environment (``ALERT_STORAGE_BACKEND=memory|sqlite``,
-    ``ALERT_DB_PATH=...``). The default is in-memory (alert state is lost on
-    restart); with ``sqlite`` the engine recovers active incidents + history on
+    Persistence (Phase 7 + 8B): when the engine is not injected, its store is
+    selected from the environment (``ALERT_STORAGE_BACKEND=memory|sqlite|postgres``;
+    ``ALERT_DB_PATH=...`` for sqlite, ``ALERT_PG_DSN`` / ``POSTGRES_*`` for
+    postgres). The default is in-memory (alert state is lost on restart); with
+    ``sqlite`` or ``postgres`` the engine recovers active incidents + history on
     construction, so a restart resumes the exact lifecycle.
     """
     app = FastAPI(
@@ -193,7 +194,8 @@ def create_app(
 
         Always 200: if the detector cannot load, reports ``status="degraded"`` /
         ``detector_loaded=False`` with detector fields null (``/health`` stays the
-        503 liveness probe). Alert state is in-memory; it resets on restart.
+        503 liveness probe). ``alert_state_in_memory`` reflects the configured
+        store: in-memory resets on restart; SQLite/PostgreSQL recover state.
         """
         engine: AlertEngine = app.state.alert_engine
         last = app.state.last_detection

@@ -1,0 +1,59 @@
+# Phase 8B - PostgreSQL mode overlay for the CURRENT application.
+#
+# Use it TOGETHER with the base compose file (the base stays SQLite-only, so the
+# default `docker compose up` flow is unchanged):
+#
+#   cp .env.example .env      # then edit POSTGRES_PASSWORD
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml down      # keep data
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml down -v   # wipe data
+#
+# This overlay:
+#   * adds a `postgres` service with a persistent named volume + healthcheck;
+#   * switches the backend to ALERT_STORAGE_BACKEND=postgres and points it at the
+#     `postgres` service over the internal compose network;
+#   * makes the backend wait for postgres to be HEALTHY before starting.
+#
+# Credentials come from `.env` (git-ignored) via ${...}; none are committed here.
+# Postgres is NOT published to the host: the backend reaches it in-network only.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ics_alerts}
+      POSTGRES_USER: ${POSTGRES_USER:-ics_app}
+      # No default: refuse to start unless a password is supplied via .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
+    volumes:
+      # Durable database, outside any image layer. Survives `down` and container
+      # restarts; removed only by `down -v`.
+      - postgres-data:/var/lib/postgresql/data
+    # Internal only: reachable by the backend on the compose network, not the host.
+    expose:
+      - "5432"
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ics_app} -d ${POSTGRES_DB:-ics_alerts}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    environment:
+      # Override the base file's SQLite selection; connect to the postgres service.
+      ALERT_STORAGE_BACKEND: postgres
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-ics_alerts}
+      POSTGRES_USER: ${POSTGRES_USER:-ics_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

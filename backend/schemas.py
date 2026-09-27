@@ -222,7 +222,8 @@ class StatusResponse(BaseModel):
     Returns HTTP 200 even when the detector cannot load (``status="degraded"``,
     ``detector_loaded=False``) so the dashboard can render a degraded banner
     rather than a dead page; ``/health`` remains the 503 liveness probe.
-    Alert state is **in-memory** and resets when the backend process restarts.
+    ``alert_state_in_memory`` reports the persistence mode truthfully: the
+    in-memory store resets on restart, while SQLite/PostgreSQL recover state.
     """
 
     status: str
@@ -250,5 +251,6 @@ class StatusResponse(BaseModel):
     )
     alert_state_in_memory: bool = Field(
         True,
-        description="Alert state lives in memory only and is lost on restart (no DB yet).",
+        description="True only when the in-memory store is in use (state lost on "
+        "restart); False when a durable backend (SQLite/PostgreSQL) is configured.",
     )

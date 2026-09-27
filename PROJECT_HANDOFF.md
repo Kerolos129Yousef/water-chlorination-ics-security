@@ -5,12 +5,9 @@
 This repository is the authoritative source of truth for the current graduation project.
 
 Current branch:
-main
+phase8b-postgres (built on phase8a-docker)
 
-Latest known merged commit:
-ecaf8a3
-
-The previous docs/root-readme branch has been merged into main.
+Phase 8A (Docker containerization) and Phase 8B (PostgreSQL AlertStore) are complete.
 
 Working tree should remain clean before starting new work.
 
@@ -62,6 +59,12 @@ Telemetry Fault Surfacing / Operator Visibility
 
 Phase 7
 Alert Persistence
+
+Phase 8A
+Docker containerization (backend + frontend, SQLite via named volume)
+
+Phase 8B
+PostgreSQL AlertStore (third interchangeable persistence backend)
 
 ---
 
@@ -192,24 +195,29 @@ Both categories can coexist.
 
 ## Persistence
 
-Phase 7 implemented AlertStore behind AlertEngine.
+Phase 7 implemented AlertStore behind AlertEngine; Phase 8B added a PostgreSQL backend.
 
 Backends:
 - InMemoryAlertStore
 - SQLiteAlertStore
+- PostgreSQLAlertStore (Phase 8B; psycopg 3 + connection pool, JSONB, seq order)
 
-SQLite configuration:
-ALERT_STORAGE_BACKEND=memory|sqlite
-ALERT_DB_PATH=...
+Configuration:
+ALERT_STORAGE_BACKEND=memory|sqlite|postgres
+ALERT_DB_PATH=...                                  (sqlite)
+ALERT_PG_DSN=... OR POSTGRES_HOST/PORT/DB/USER/PASSWORD  (postgres; from env, never source)
 
-Alert persistence includes:
+Alert persistence includes (all three backends, identical engine semantics):
 - PROCESS_ANOMALY
 - TELEMETRY_FAULT
 - lifecycle state
 - history
 - ID counters / restart recovery
 
-SQLite runtime files must never be committed.
+SQLite runtime files, .env credentials, and datasets must never be committed.
+
+Note: PostgreSQL makes storage server-grade but does NOT add distributed
+multi-instance AlertEngine coordination — that is explicitly out of scope for 8B.
 
 ---
 
@@ -221,10 +229,18 @@ Before Phase 7:
 After Phase 7:
 381 tests passing
 
-Latest verified Phase 7 suite:
-381 passed, 1 warning
+After Phase 8A:
+386 tests passing (+5 static Docker-packaging tests)
 
-The warning was a pre-existing Starlette/httpx deprecation warning.
+After Phase 8B:
+405 tests passing (+19: real-PostgreSQL integration + docker-packaging for the pg overlay)
+
+Latest verified suite:
+405 passed, 1 warning
+
+The Phase 8B PostgreSQL integration tests run against a real postgres:16-alpine
+container (started via Docker) and are skipped only if Docker and ALERT_TEST_PG_DSN
+are both unavailable. The warning was a pre-existing Starlette/httpx deprecation warning.
 
 When starting new work, ALWAYS run the actual current test suite instead of assuming the old count remains unchanged.
 
@@ -257,6 +273,8 @@ README.md
 docs/provenance/phase6a_telemetry_health.md
 docs/provenance/phase6b_telemetry_fault_alerting.md
 docs/provenance/phase7_alert_persistence.md
+docs/provenance/phase8a_docker.md
+docs/provenance/phase8b_postgres_alertstore.md
 
 The Phase 1 report is documentation only and must not be modified as part of normal engineering phases unless explicitly requested.
 
@@ -264,8 +282,9 @@ The Phase 1 report is documentation only and must not be modified as part of nor
 
 ## Current Limitations
 
-1. Alert persistence currently uses SQLite for local durability.
-2. SQLite is not a multi-node/high-concurrency production database.
+1. Alert persistence supports memory / SQLite / PostgreSQL behind one interface.
+2. PostgreSQL makes storage server-grade, but distributed multi-instance AlertEngine
+   coordination is NOT implemented (single engine process assumed).
 3. Telemetry-health detection is single-channel focused.
 4. No correlated sensor-freeze detection.
 5. No advanced drift detection.
@@ -273,7 +292,7 @@ The Phase 1 report is documentation only and must not be modified as part of nor
 7. Threshold remains static.
 8. No authentication.
 9. No external notifications.
-10. No Docker deployment yet.
+10. No TLS to the database / no cloud secret manager (env/.env only).
 11. No CI/CD DevSecOps security gates yet.
 12. No AWS/Terraform deployment yet.
 13. Kubernetes is not implemented.
@@ -284,17 +303,13 @@ The Phase 1 report is documentation only and must not be modified as part of nor
 
 Next planned phase:
 
-Phase 8A — Docker Containerization
+Phase 9 — CI/CD + DevSecOps security gates
 
 Goal:
-Containerize the current working application without changing its behavior.
+Automated build/test/scan pipeline for the containerized application. Still no
+cloud/IaC — that is Phase 10+.
 
-Phase 8A should initially use:
-- current FastAPI backend
-- current frontend
-- current SQLite persistence
-
-Do NOT introduce PostgreSQL in Phase 8A.
+Phases 8A (Docker) and 8B (PostgreSQL AlertStore) are complete and smoke-tested.
 
 ---
 
@@ -334,7 +349,6 @@ Do not import architecture or claims from older reports that describe:
 - dual process/network branches
 - WADI production deployment
 - SQLite authentication
-- Docker already implemented
 - Kubernetes already implemented
 - six CI/CD gates
 - Prometheus/Grafana already implemented

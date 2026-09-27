@@ -150,6 +150,7 @@ closure). This records what is actually built and tested in the repository.
 | Phase 6B | Telemetry fault surfacing / operator visibility: `TELEMETRY_FAULT` incidents in the `AlertEngine` (second track), monitoring API + dashboard, distinct from and coexisting with `PROCESS_ANOMALY` | **COMPLETE** |
 | Phase 7 | Alert persistence: durable `AlertStore` behind the `AlertEngine` (`InMemoryAlertStore` default, `SQLiteAlertStore` opt-in), restart recovery of active incidents + history for both categories | **COMPLETE** |
 | Phase 8A | Docker containerization: reproducible CPU-only, non-root, read-only backend image + static dashboard image, `docker-compose` local deployment, SQLite persisted to a named volume (survives restart). No semantic change; no PostgreSQL; dataset excluded from images (`docker/`, `docker-compose.yml`, `docs/provenance/phase8a_docker.md`) | **COMPLETE** |
+| Phase 8B | PostgreSQL AlertStore: third interchangeable persistence backend (`PostgreSQLAlertStore`, psycopg 3 + pool) behind the unchanged `AlertStore`/`AlertEngine`; `docker-compose.postgres.yml` overlay (postgres service, named volume, healthcheck, env-only credentials). Memory + SQLite unchanged; no distributed engine coordination (`alerting/store.py`, `docs/provenance/phase8b_postgres_alertstore.md`) | **COMPLETE** |
 
 **Actual implementation order:** Phase 2A (SWaT replay + rolling window) was
 built **before** Phase 2B (FastAPI backend). This differs from the numbered
@@ -254,19 +255,40 @@ container restarts. A tiny `nginx:alpine` image serves the unchanged zero-build
 dashboard on `:8080` (the backend already CORS-allows that origin). The SWaT
 dataset is never baked into any image; the production API starts from the 768 KB
 immutable artifacts alone, while SWaT replay/evaluation stays a separate research
-path. `docker compose up --build` runs the stack locally. No PostgreSQL yet
-(Phase 8B). See `docs/provenance/phase8a_docker.md`.
+path. `docker compose up --build` runs the stack locally. See
+`docs/provenance/phase8a_docker.md`.
 
-Full test suite: **386 tests passing** (`pytest -q`) — the 381 Phase 0–7 cases
-(22 backend API, 15 monitoring-API, 12 Phase 3 end-to-end, 21 Phase 4
-alert-engine, 34 Phase 6A telemetry-health, 31 Phase 6B telemetry-fault, 30
-Phase 7 persistence) plus 5 Phase 8A Docker-packaging validation cases. The Phase
-8A container was additionally exercised with a real `docker compose` smoke test
-(build → health → `/score` → both alert categories persisted across a backend
-restart → dashboard reachable → clean shutdown).
+**Phase 8B adds PostgreSQL as a third interchangeable `AlertStore` backend** behind
+the unchanged `AlertEngine`. `PostgreSQLAlertStore` (`alerting/store.py`) uses
+psycopg 3 with a connection pool and the same logical schema as SQLite in native
+types (JSONB for the list columns, `seq BIGSERIAL` for open order, BOOLEAN/DOUBLE
+PRECISION, indexed on `seq`/`status`/`category`); each op is one parameterised,
+autocommitted transaction. `psycopg` is imported lazily, so the memory/sqlite paths
+never require it. Selection is `ALERT_STORAGE_BACKEND=memory|sqlite|postgres` with
+`ALERT_PG_DSN` or `POSTGRES_HOST/PORT/DB/USER/PASSWORD` (credentials from the
+environment only, never source). A `docker-compose.postgres.yml` overlay (used with
+the SQLite-only base file) adds a `postgres` service with a persistent named volume,
+`pg_isready` healthcheck (backend waits for it), internal-only networking, and
+`.env`-supplied credentials. Restart recovery, id continuity, and both alert
+categories work identically to SQLite (the engine's `_recover()` is
+backend-agnostic). Explicitly **out of scope for 8B**: distributed multi-instance
+`AlertEngine` coordination — PostgreSQL makes storage server-grade, but two engine
+processes would each keep their own in-memory active slot. See
+`docs/provenance/phase8b_postgres_alertstore.md`.
 
-Not started (explicitly out of scope): PostgreSQL/cloud persistence, AWS,
-Terraform, Kubernetes, CI/CD, notifications, authentication.
+Full test suite: **411 tests passing** (`pytest -q`) — the 386 Phase 0–8A cases
+plus 25 Phase 8B cases: 19 real-PostgreSQL integration tests against a throwaway
+`postgres:16-alpine` container (construction/schema, upsert/query, both-category
+full-lifecycle restart recovery, id continuity, env selection, invalid-config
+handling) and 6 docker-packaging checks for the postgres overlay. Both persistence
+modes were exercised with **real `docker compose` smoke tests**: SQLite mode and
+PostgreSQL mode each verified end-to-end (health → `/score` → both alert categories
+persisted across a backend restart → dashboard reachable), and in PostgreSQL mode
+the data additionally survived a **postgres container restart** via the named volume.
+
+Not started (explicitly out of scope): distributed multi-instance coordination,
+cloud persistence, AWS, Terraform, Kubernetes, CI/CD, notifications, authentication,
+TLS to the database.
 
 ---
 

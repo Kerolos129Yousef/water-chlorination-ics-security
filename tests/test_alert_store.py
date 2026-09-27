@@ -201,8 +201,9 @@ def test_env_selects_sqlite(tmp_path):
 
 
 def test_env_unknown_backend_is_rejected():
+    # 'postgres' is now a valid backend (Phase 8B); use a genuinely unknown value.
     with pytest.raises(AlertStoreError, match="unknown"):
-        alert_store_from_env({"ALERT_STORAGE_BACKEND": "postgres"})
+        alert_store_from_env({"ALERT_STORAGE_BACKEND": "cassandra"})
 
 
 def test_env_backend_is_case_insensitive(tmp_path):
