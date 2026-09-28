@@ -90,12 +90,15 @@ jobs:
       # No SWaT dataset in CI: dataset-gated tests skip via the fixture guard.
       # Point at a path that cannot exist so the skip reason is explicit.
       SWAT_DATASET_DIR: "/nonexistent-swat-dataset-ci"
-      # Golden-vector parity: force SINGLE-THREADED math so the floating-point
-      # reduction order is sequential and independent of the runner's core count.
-      # Parallel reductions sum in core-count-dependent chunk order, which drifts
-      # ~1e-10 between hosts and breaks the rtol=1e-5 per-feature-error assertion.
-      # This configures the ENVIRONMENT only; it does NOT touch the tests,
-      # tolerances, or fixtures (which stay canonical - see phase9 provenance).
+      # Golden-vector parity (ENVIRONMENT-only; the tests, rtol=1e-5, and fixtures
+      # stay canonical - see phase9 provenance). The fixtures were generated on an
+      # AVX2 host. GitHub's runners are typically AVX-512 Xeons, so torch
+      # dispatches to AVX-512 kernels whose FP reduction order differs by ~1e-10 -
+      # enough to fail the per-feature-error assertion on near-zero features.
+      # Pin torch's CPU kernel path to AVX2 so both hosts run identical kernels,
+      # and force single-threaded math so the reduction order is sequential and
+      # core-count-independent. Verified locally: both leave the fixtures exact.
+      ATEN_CPU_CAPABILITY: "avx2"
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
