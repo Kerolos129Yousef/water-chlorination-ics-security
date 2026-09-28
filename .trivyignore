@@ -1,0 +1,35 @@
+# Phase 9 - Trivy vulnerability exceptions (NARROW, JUSTIFIED, TIME-BOUNDED).
+#
+# Policy (see docs/provenance/phase9_devsecops.md, "Gate 6"):
+#   * The container gate fails on any FIXABLE HIGH/CRITICAL (--ignore-unfixed).
+#   * Unfixed OS/base-image CVEs are reported but not blocking (no upstream fix
+#     exists; remediation belongs to the base image, addressed in Phase 10 by
+#     moving to a hardened/distroless base).
+#   * This file lists ONLY specific advisories reviewed and judged
+#     non-exploitable in THIS runtime. It is not a blanket ignore: any NEW
+#     fixable HIGH/CRITICAL (in app deps or OS packages) still fails CI.
+#
+# Each entry below is a copy of a build-tool dependency that pip/setuptools
+# VENDOR internally (pip/_vendor/*, setuptools/_vendor/*). They are used only by
+# the package installer, are never imported by `uvicorn backend.app:app`, and
+# pip is never invoked inside the immutable, non-root, read-only runtime
+# container. The importable setuptools in the image is already 79.0.1 (patched);
+# Trivy flags a stale vendored dist-info. Reviewed 2026-09-28.
+# FOLLOW-UP (Phase 10): adopt a slim/distroless base that ships no pip/setuptools
+# in the runtime layer, then delete these entries and re-scan.
+
+# setuptools PackageIndex path traversal - triggered only when installing from
+# an index at runtime; never happens in this image. Importable setuptools=79.0.1.
+CVE-2025-47273
+
+# wheel privilege escalation via malicious wheel - only during `pip install` of
+# an untrusted wheel; the runtime container never installs packages.
+CVE-2026-24049
+
+# jaraco.context path traversal via malicious tar - vendored by setuptools; only
+# reachable through setuptools' install-time archive handling.
+CVE-2026-23949
+
+# msgpack OOB read on Unpacker reuse - vendored by pip; the application request
+# path uses JSON/pydantic, never msgpack, and pip is not run at runtime.
+GHSA-6v7p-g79w-8964
