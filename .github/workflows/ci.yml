@@ -125,9 +125,37 @@ jobs:
           # Test-only tools (kept out of the runtime image), pinned to the repo's
           # verified versions.
           pip install pytest==8.4.2 httpx==0.28.1
+      - name: Numeric-environment diagnostic (golden-vector parity)
+        run: |
+          python - <<'PY'
+          import os, numpy as np, torch
+          print("ATEN_CPU_CAPABILITY env =", os.environ.get("ATEN_CPU_CAPABILITY"))
+          print("torch cpu capability   =", torch.backends.cpu.get_cpu_capability())
+          print("torch threads          =", torch.get_num_threads())
+          print("numpy", np.__version__, "| torch", torch.__version__)
+          try:
+              with open("/proc/cpuinfo") as f:
+                  flags = [l for l in f if l.startswith("flags")][0]
+              print("has avx2   =", " avx2 " in flags)
+              print("has avx512 =", "avx512" in flags)
+              print("has fma    =", " fma " in flags)
+          except Exception as e:
+              print("cpuinfo err", e)
+          import json
+          from ml.src.detector import TranADDetector
+          d = TranADDetector.from_artifacts("ml/artifacts/swat_TranAD")
+          g = json.load(open("tests/fixtures/golden_vectors.json"))
+          for c in g["cases"]:
+              raw = np.array(c["raw_window"], dtype=np.float64)
+              r = d.score(raw)
+              fe = np.array(c["expected"]["feature_errors"], dtype=np.float64)
+              ab = float(np.max(np.abs(r.feature_errors - fe)))
+              print(f"{c['name']:8s} feat_absmax={ab:.3e} score_absdiff={abs(r.anomaly_score-c['expected']['anomaly_score']):.3e}")
+          PY
       - name: Run test suite
-        # Golden-vector tests run here unchanged: Linux is the canonical
-        # environment for the fixtures. Dataset-gated tests skip (no CSVs).
+        # Golden-vector tests run here unchanged: Linux + pinned deps + AVX2 kernel
+        # path is the canonical environment for the fixtures. Dataset-gated tests
+        # skip (no CSVs).
         run: python -m pytest -q -rs --durations=10
 
   # -------------------------------------------------------------- Gate 3: SAST
