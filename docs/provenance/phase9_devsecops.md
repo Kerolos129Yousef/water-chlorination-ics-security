@@ -239,15 +239,55 @@ SHA-256 checksum - to minimise third-party action surface and avoid the
 
 ---
 
-## 10. Golden-vector requirement
+## 10. Golden-vector requirement and the Intel-vs-AMD FP investigation
 
-The golden-vector tests (`tests/test_golden_vectors.py`, fixtures in
-`tests/fixtures/golden_vectors.json`) are **unchanged**: no widened tolerances,
-no regenerated fixtures, no skip, no xfail. They run on the `ubuntu-latest`
-runner, establishing Linux as the canonical CI parity environment. The
-previously documented **Windows-only ~1.7 ppm numerical drift** remains a
-host-environment issue; no new evidence disproves that diagnosis, and running the
-canonical checks on Linux is the correct response.
+The golden-vector fixtures (`tests/fixtures/golden_vectors.json`) are
+**unchanged**: not regenerated, not skipped, not xfail'd, and the ML artifacts /
+threshold are untouched. The tests run on `ubuntu-latest`. During Phase 9 the
+first CI runs surfaced a single failure — `test_golden_feature_errors_match[normal]`
+— which was investigated to root cause before any change.
+
+### Root cause (established by a read-only CI diagnostic matrix)
+
+The **fixtures were generated on an Intel CPU** (recorded env: Python 3.10.12,
+torch 2.9.1+cpu, numpy 2.2.6). **GitHub's hosted runners are AMD EPYC** (observed:
+EPYC 7763 and EPYC 9V74). torch's CPU wheel runs the transformer GEMMs through
+Intel **MKL / oneDNN**, whose kernels round **vendor-specifically**, so on AMD the
+near-zero `normal` reconstruction errors drift up to **~8e-10 absolute** (max
+observed 8.149e-10 on EPYC 7763, 3.27e-10 on EPYC 9V74). On errors of magnitude
+~1e-6 that is ~2e-4 *relative*, over the old `rtol=1e-5, atol=1e-12` bar. The
+`attack` case passes (larger errors); the anomaly **score** matches to ~1e-9–1e-12
+and every score/decision test passes. Max absolute delta anywhere: **1.024e-8**.
+
+A diagnostic matrix ruled out every other hypothesis (the input is bit-identical
+— the fixture's `preprocessed_sha256` passes on CI):
+
+| Variable tested | Result |
+|---|---|
+| Python 3.10.12 vs 3.10.21 | identical delta — **not the cause** |
+| oneDNN on vs off (`mkldnn.enabled`) | identical delta — **not the cause** (MKL-BLAS fallback diverges cross-vendor too) |
+| `MKL_CBWR=AVX2`, `ATEN_CPU_CAPABILITY=avx2`, single-thread | identical delta — **not the cause** (MKL CBWR reproducibility does not extend Intel↔AMD) |
+| Phase 8A container **on the runner** | identical delta — **not the cause** (same AMD CPU) |
+| **Intel CPU (local / container on Intel)** | **delta = 0.0** — the only variable that flips it |
+
+No environment, ISA, threading, oneDNN, MKL-CBWR, Python-patch, or containerisation
+setting achieves Intel↔AMD bit-parity for these values; it is intrinsic
+cross-vendor floating-point behaviour.
+
+### The fix (authorised, evidence-based)
+
+The per-feature-error assertion gains an **absolute floor**: `rtol=1e-5` unchanged,
+`atol` raised `1e-12 → 1e-9` (`FEATURE_ERROR_ATOL` in `tests/test_golden_vectors.py`).
+`1e-9` sits above the measured cross-vendor noise (≤8.15e-10) and far below any
+real formula/ordering/architecture change (orders of magnitude) — verified: a
+simulated 1e-3 perturbation is still caught. The anomaly **score** comparison
+(`SCORE_RTOL=1e-6`) and all decision/architecture/ordering tests are **unchanged
+and strict**. The fixtures, ML artifacts, and `threshold.json` are untouched.
+
+This supersedes the earlier "Windows-only 1.7 ppm" note: the new evidence shows
+the drift is a general **CPU-vendor** host-environment issue (Intel↔AMD), not
+Windows-specific, and it is now handled by a principled absolute-tolerance floor
+rather than left as an environment caveat.
 
 ---
 

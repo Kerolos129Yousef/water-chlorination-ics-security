@@ -90,24 +90,6 @@ jobs:
       # No SWaT dataset in CI: dataset-gated tests skip via the fixture guard.
       # Point at a path that cannot exist so the skip reason is explicit.
       SWAT_DATASET_DIR: "/nonexistent-swat-dataset-ci"
-      # Golden-vector parity (ENVIRONMENT-only; the tests, rtol=1e-5, and fixtures
-      # stay canonical - see phase9 provenance). torch's CPU wheel computes the
-      # transformer GEMMs through Intel MKL, which picks a CPU-tuned code path at
-      # runtime; two different AVX2 hosts therefore round the reconstruction
-      # errors ~1e-8 apart - enough to fail rtol=1e-5 on near-zero features
-      # (thread/ISA env vars did NOT fix it - it is an MKL code-path issue).
-      # MKL_CBWR=AVX2 is Intel's Conditional Numerical Reproducibility switch: it
-      # forces the fixed AVX2 kernel path so MKL is bit-reproducible across CPUs.
-      # The fixtures were generated on an AVX2 host, so AVX2 (not COMPATIBLE, which
-      # drops to an SSE2 baseline) reproduces them exactly. Single-threaded math
-      # keeps the reduction order sequential and core-count-independent.
-      # Verified locally: MKL_CBWR=AVX2 leaves every golden vector bit-exact.
-      MKL_CBWR: "AVX2"
-      ATEN_CPU_CAPABILITY: "avx2"
-      OMP_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-      OPENBLAS_NUM_THREADS: "1"
-      NUMEXPR_NUM_THREADS: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -130,37 +112,12 @@ jobs:
           # Test-only tools (kept out of the runtime image), pinned to the repo's
           # verified versions.
           pip install pytest==8.4.2 httpx==0.28.1
-      - name: Numeric-environment diagnostic (golden-vector parity)
-        run: |
-          python - <<'PY'
-          import os, numpy as np, torch
-          print("ATEN_CPU_CAPABILITY env =", os.environ.get("ATEN_CPU_CAPABILITY"))
-          print("torch cpu capability   =", torch.backends.cpu.get_cpu_capability())
-          print("torch threads          =", torch.get_num_threads())
-          print("numpy", np.__version__, "| torch", torch.__version__)
-          try:
-              with open("/proc/cpuinfo") as f:
-                  flags = [l for l in f if l.startswith("flags")][0]
-              print("has avx2   =", " avx2 " in flags)
-              print("has avx512 =", "avx512" in flags)
-              print("has fma    =", " fma " in flags)
-          except Exception as e:
-              print("cpuinfo err", e)
-          import json
-          from ml.src.detector import TranADDetector
-          d = TranADDetector.from_artifacts("ml/artifacts/swat_TranAD")
-          g = json.load(open("tests/fixtures/golden_vectors.json"))
-          for c in g["cases"]:
-              raw = np.array(c["raw_window"], dtype=np.float64)
-              r = d.score(raw)
-              fe = np.array(c["expected"]["feature_errors"], dtype=np.float64)
-              ab = float(np.max(np.abs(r.feature_errors - fe)))
-              print(f"{c['name']:8s} feat_absmax={ab:.3e} score_absdiff={abs(r.anomaly_score-c['expected']['anomaly_score']):.3e}")
-          PY
       - name: Run test suite
-        # Golden-vector tests run here unchanged: Linux + pinned deps + AVX2 kernel
-        # path is the canonical environment for the fixtures. Dataset-gated tests
-        # skip (no CSVs).
+        # Dataset-gated tests skip (no SWaT CSVs in CI). Golden-vector tests run
+        # unchanged; their per-feature-error assertion carries an atol=1e-9 floor
+        # that absorbs Intel-vs-AMD FP noise (fixtures are Intel; GitHub runners
+        # are AMD EPYC) while the anomaly score/decision stay strict. Root-cause
+        # investigation: docs/provenance/phase9_devsecops.md.
         run: python -m pytest -q -rs --durations=10
 
   # -------------------------------------------------------------- Gate 3: SAST

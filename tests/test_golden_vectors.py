@@ -27,6 +27,16 @@ make the suite brittle across torch builds, while a formula, ordering or
 architecture change moves the score by orders of magnitude -- far outside this
 band. The generating environment is recorded in the fixture so genuine
 cross-version drift is diagnosable rather than mysterious.
+
+Per-feature reconstruction errors are compared at ``rtol=1e-5`` with an absolute
+floor of ``atol=1e-9`` (``FEATURE_ERROR_ATOL``). The fixtures were generated on an
+Intel CPU; torch's MKL/oneDNN GEMM kernels round vendor-specifically, so on AMD
+runners the near-zero ``normal`` errors drift up to ~8e-10 absolute (measured on
+GitHub's AMD EPYC 7763/9V74; Phase 9 diagnostic, docs/provenance/phase9_devsecops.md).
+That is below the ``atol`` floor, so genuine formula/ordering/architecture changes
+(orders of magnitude) are still caught, while physically-meaningless cross-vendor
+FP noise on ~1e-6-magnitude errors does not. The anomaly SCORE and decision are
+unaffected (they match to ~1e-9) and stay strict.
 """
 
 from __future__ import annotations
@@ -39,6 +49,14 @@ import pytest
 from tests.conftest import FLAT_DIM, N_FEATURES, WINDOW
 
 SCORE_RTOL = 1e-6
+
+# Absolute floor for the per-feature reconstruction-error comparison. The
+# relative check stays at rtol=1e-5; this floor absorbs cross-CPU-vendor FP noise
+# (Intel fixtures vs AMD CI runners) on near-zero error components, measured at
+# <=8e-10 (see the module docstring / Phase 9 provenance). It is far below any
+# real formula/ordering/architecture change, which shifts errors by orders of
+# magnitude.
+FEATURE_ERROR_ATOL = 1e-9
 
 
 # ------------------------------------------------------------ fixture integrity
@@ -142,7 +160,7 @@ def test_golden_feature_errors_match(detector, golden_cases, case_name):
     errors = detector.score(raw).feature_errors
     expected = np.array(case["expected"]["feature_errors"], dtype=np.float64)
     assert errors.shape == expected.shape == (N_FEATURES,)
-    np.testing.assert_allclose(errors, expected, rtol=1e-5, atol=1e-12)
+    np.testing.assert_allclose(errors, expected, rtol=1e-5, atol=FEATURE_ERROR_ATOL)
 
 
 def test_golden_decisions_straddle_the_threshold(detector, golden_cases):
