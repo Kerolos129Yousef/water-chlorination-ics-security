@@ -91,13 +91,18 @@ jobs:
       # Point at a path that cannot exist so the skip reason is explicit.
       SWAT_DATASET_DIR: "/nonexistent-swat-dataset-ci"
       # Golden-vector parity (ENVIRONMENT-only; the tests, rtol=1e-5, and fixtures
-      # stay canonical - see phase9 provenance). The fixtures were generated on an
-      # AVX2 host. GitHub's runners are typically AVX-512 Xeons, so torch
-      # dispatches to AVX-512 kernels whose FP reduction order differs by ~1e-10 -
-      # enough to fail the per-feature-error assertion on near-zero features.
-      # Pin torch's CPU kernel path to AVX2 so both hosts run identical kernels,
-      # and force single-threaded math so the reduction order is sequential and
-      # core-count-independent. Verified locally: both leave the fixtures exact.
+      # stay canonical - see phase9 provenance). torch's CPU wheel computes the
+      # transformer GEMMs through Intel MKL, which picks a CPU-tuned code path at
+      # runtime; two different AVX2 hosts therefore round the reconstruction
+      # errors ~1e-8 apart - enough to fail rtol=1e-5 on near-zero features
+      # (thread/ISA env vars did NOT fix it - it is an MKL code-path issue).
+      # MKL_CBWR=AVX2 is Intel's Conditional Numerical Reproducibility switch: it
+      # forces the fixed AVX2 kernel path so MKL is bit-reproducible across CPUs.
+      # The fixtures were generated on an AVX2 host, so AVX2 (not COMPATIBLE, which
+      # drops to an SSE2 baseline) reproduces them exactly. Single-threaded math
+      # keeps the reduction order sequential and core-count-independent.
+      # Verified locally: MKL_CBWR=AVX2 leaves every golden vector bit-exact.
+      MKL_CBWR: "AVX2"
       ATEN_CPU_CAPABILITY: "avx2"
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
