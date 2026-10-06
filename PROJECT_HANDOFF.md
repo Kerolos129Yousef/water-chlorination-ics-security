@@ -5,10 +5,19 @@
 This repository is the authoritative source of truth for the current graduation project.
 
 Current branch:
-phase9-devsecops (built on merged main @ 5baeb58)
+main
 
 Phase 8A (Docker containerization), Phase 8B (PostgreSQL AlertStore), and
 Phase 9 (CI/CD + DevSecOps security gates) are complete.
+
+Phase 9 has been merged into main (PR #5). main now contains Phase 9.
+
+Latest main commit:
+b46c1ca (Merge pull request #5 from Kerolos129Yousef/phase9-devsecops;
+first parent 5baeb58, second parent d7f256a)
+
+Next phase:
+Phase 10 — AWS + Terraform (cloud deployment + IaC). Not started.
 
 Working tree should remain clean before starting new work.
 
