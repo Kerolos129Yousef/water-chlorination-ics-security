@@ -1,8 +1,10 @@
 # Water Chlorination ICS Security
 
+[![CI](https://github.com/Kerolos129Yousef/water-chlorination-ics-security/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Kerolos129Yousef/water-chlorination-ics-security/actions/workflows/ci.yml)
+
 **Platform for Protecting Water Chlorination Systems from Cyber Attacks** — an end-to-end, local OT/ICS security monitoring MVP that productionizes a TranAD process-aware anomaly detector for the SWaT water-treatment dataset.
 
-> **Status:** Graduation project. Local MVP working end-to-end, containerized (**Phase 8B — complete**): Docker/`docker compose` deployment with three interchangeable alert-persistence backends (in-memory / SQLite / PostgreSQL). Cloud, CI/CD security gates, and multi-instance coordination are **planned**, not yet implemented. See [MVP Status](#8-mvp-status) and [Roadmap](#14-project-roadmap).
+> **Status:** Graduation project. Local MVP working end-to-end, containerized (**Phase 8B — complete**), with a **CI/CD + DevSecOps security pipeline (Phase 9 — complete)**: GitHub Actions runs six gates on every PR/`main` push — lint, tests (incl. a real PostgreSQL 16 service), SAST (Bandit), dependency audit (pip-audit), secret scan (Gitleaks), and a real Docker build + image scan (Trivy). Cloud deployment and multi-instance coordination remain **planned**. See [MVP Status](#8-mvp-status), [CI/CD](#131-cicd--devsecops-phase-9), and [Roadmap](#14-project-roadmap).
 
 ---
 
@@ -42,7 +44,7 @@ Currently implemented and tested:
 - **PostgreSQL mode (Phase 8B)** — `docker-compose.postgres.yml` overlay adds a PostgreSQL service (persistent volume, healthcheck, env-only credentials); the backend selects it with `ALERT_STORAGE_BACKEND=postgres`.
 - **411 automated tests** passing (`pytest`), including a real-PostgreSQL integration suite.
 
-> AWS, Terraform, Kubernetes, CI/CD, DevSecOps security gates, authentication, TLS to the database, and distributed multi-instance coordination are **not implemented** in the current repository. They are tracked in the [roadmap](#14-project-roadmap).
+> A **CI/CD + DevSecOps pipeline is implemented** (Phase 9): GitHub Actions with lint, tests, SAST, dependency/secret/container scanning — see [CI/CD](#131-cicd--devsecops-phase-9). AWS, Terraform, Kubernetes, authentication, TLS to the database, and distributed multi-instance coordination remain **not implemented** in the current repository. They are tracked in the [roadmap](#14-project-roadmap).
 
 ---
 
@@ -185,7 +187,7 @@ Metrics are re-runnable via `scripts/measure_detection_metrics.py`, not hand-tra
 
 ## 8. MVP Status
 
-**Current phase: Phase 5A — COMPLETE.** The local MVP works end-to-end.
+**Current phase: Phase 9 — COMPLETE.** The local MVP works end-to-end, is containerized, and is guarded by an automated CI/CD security pipeline.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -197,10 +199,15 @@ Metrics are re-runnable via `scripts/measure_detection_metrics.py`, not hand-tra
 | Phase 3 | End-to-end integration: replay → window → HTTP `/score` → TranAD | ✅ Complete |
 | Phase 4 | Alert engine: detections → deduplicated, lifecycle-managed alerts (`alerting/`) | ✅ Complete |
 | Phase 5A | Monitoring API + minimal operator dashboard (`frontend/`) | ✅ Complete |
+| Phase 6 | Telemetry-health monitor + telemetry-fault alert track | ✅ Complete |
+| Phase 7 | Alert persistence (durable SQLite) | ✅ Complete |
+| Phase 8A | Docker containerization (backend + dashboard, `docker compose`) | ✅ Complete |
+| Phase 8B | PostgreSQL alert-store backend + compose overlay | ✅ Complete |
+| Phase 9 | CI/CD + DevSecOps security gates (GitHub Actions) | ✅ Complete |
 
 Verified in the repository (as documented in `PROJECT_CONTEXT.md` and the project briefing):
 
-- **286 tests passing** (`pytest`), including backend API, monitoring API, Phase 3 end-to-end integration, and Phase 4 alert-engine cases.
+- **411 tests passing** (`pytest`), including backend API, monitoring API, Phase 3 end-to-end integration, alert-engine, telemetry-health/fault, alert persistence across all three backends (incl. a real-PostgreSQL suite), and Docker-packaging validation.
 - **Real HTTP verification** — the demo runs over both the in-process ASGI app and a real `uvicorn` socket.
 - **Normal, attack, and recovery scenarios** exercised end-to-end.
 - **Dashboard monitoring** and full **alert lifecycle** (`OPEN → CLOSED`) demonstrated.
@@ -410,23 +417,46 @@ Each of `ml/`, `simulator/`, `backend/`, `alerting/`, `frontend/` carries its ow
 
 **Current verified count: 411 tests passing.** The suite covers preprocessing, the TranAD model and scoring, the detector, golden-vector parity, the SWaT replay and rolling window, the backend API, the monitoring API, the alert engine, telemetry-health / telemetry-fault handling, alert persistence across all three backends (in-memory, SQLite, and a **real-PostgreSQL** integration suite that spins up a throwaway `postgres:16-alpine` container — skipped only if Docker is unavailable), the Phase 3 end-to-end integration, and static Docker-packaging validation. Tests that require the licensed dataset are guarded; the golden-vector fixtures are committed so ML inference parity is testable without the raw CSVs.
 
+### 13.1 CI/CD + DevSecOps (Phase 9)
+
+Every pull request targeting `main` and every push to `main` runs
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) — a real, executable
+GitHub Actions pipeline (not decorative). Six gates run in parallel; a final
+`ci-gate` job fails unless all six report success:
+
+| Gate | Tool | Fails the build when… |
+|---|---|---|
+| Code quality | ruff | pyflakes (`F`) / syntax (`E9`) errors |
+| Tests | pytest + `postgres:16-alpine` service | any test fails (SWaT-gated tests skip; the dataset never enters CI) |
+| SAST | Bandit | finding at severity ≥ MEDIUM **and** confidence ≥ HIGH |
+| Dependency audit | pip-audit | any advisory on the pinned runtime manifest (4 documented torch exceptions) |
+| Secret scan | Gitleaks | any secret detected in the full git history |
+| Container | `docker build` (production Dockerfile) + Trivy | any **fixable** HIGH/CRITICAL image vuln (unfixed base-OS CVEs reported, not blocking; 4 documented vendored exceptions) |
+
+Least-privilege token (`contents: read`), third-party actions pinned to commit
+SHAs, ephemeral CI-only PostgreSQL credentials, and no dataset/secret ever
+committed or uploaded. Full design, fail-policy, and justified exceptions:
+[`docs/provenance/phase9_devsecops.md`](docs/provenance/phase9_devsecops.md).
+
 ---
 
 ## 14. Project Roadmap
 
 ### Currently implemented
 
-TranAD inference library, SWaT replay + rolling window, thin FastAPI backend, end-to-end integration, alert engine with telemetry-fault track, alert persistence across three interchangeable backends (in-memory / SQLite / PostgreSQL), monitoring API, operator dashboard, Docker containerization (backend + dashboard, `docker compose`, SQLite and PostgreSQL modes), 411 tests — see [Key Features](#2-key-features) and [MVP Status](#8-mvp-status).
+TranAD inference library, SWaT replay + rolling window, thin FastAPI backend, end-to-end integration, alert engine with telemetry-fault track, alert persistence across three interchangeable backends (in-memory / SQLite / PostgreSQL), monitoring API, operator dashboard, Docker containerization (backend + dashboard, `docker compose`, SQLite and PostgreSQL modes), a **CI/CD + DevSecOps GitHub Actions pipeline** (lint, tests, SAST, dependency/secret/container scanning — Phase 9), 411 tests — see [Key Features](#2-key-features) and [MVP Status](#8-mvp-status).
 
 ### Future work (planned / not yet implemented)
 
 | Item | Notes |
 |---|---|
 | Distributed multi-instance coordination | Cluster-safe `AlertEngine` (e.g. `SELECT … FOR UPDATE` / leader); PostgreSQL storage is present (Phase 8B) but engine coordination is not |
-| CI/CD | Automated build/test pipeline |
-| SAST | Static application security testing gate |
-| Dependency scanning | Supply-chain vulnerability scanning |
-| Container scanning | Image vulnerability scanning |
+| ~~CI/CD~~ | ✅ Implemented (Phase 9) — GitHub Actions build/test pipeline |
+| ~~SAST~~ | ✅ Implemented (Phase 9) — Bandit gate |
+| ~~Dependency scanning~~ | ✅ Implemented (Phase 9) — pip-audit gate |
+| ~~Container scanning~~ | ✅ Implemented (Phase 9) — Trivy image scan |
+| Secret scanning | ✅ Implemented (Phase 9) — Gitleaks (full-history) gate |
+| Registry publishing | Push scanned images to a registry (deferred deployment phase) |
 | AWS | Cloud deployment |
 | Terraform | Infrastructure-as-code |
 | **Kubernetes** | **Stretch / future** per current project decision |

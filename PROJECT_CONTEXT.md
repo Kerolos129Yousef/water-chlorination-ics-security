@@ -151,6 +151,7 @@ closure). This records what is actually built and tested in the repository.
 | Phase 7 | Alert persistence: durable `AlertStore` behind the `AlertEngine` (`InMemoryAlertStore` default, `SQLiteAlertStore` opt-in), restart recovery of active incidents + history for both categories | **COMPLETE** |
 | Phase 8A | Docker containerization: reproducible CPU-only, non-root, read-only backend image + static dashboard image, `docker-compose` local deployment, SQLite persisted to a named volume (survives restart). No semantic change; no PostgreSQL; dataset excluded from images (`docker/`, `docker-compose.yml`, `docs/provenance/phase8a_docker.md`) | **COMPLETE** |
 | Phase 8B | PostgreSQL AlertStore: third interchangeable persistence backend (`PostgreSQLAlertStore`, psycopg 3 + pool) behind the unchanged `AlertStore`/`AlertEngine`; `docker-compose.postgres.yml` overlay (postgres service, named volume, healthcheck, env-only credentials). Memory + SQLite unchanged; no distributed engine coordination (`alerting/store.py`, `docs/provenance/phase8b_postgres_alertstore.md`) | **COMPLETE** |
+| Phase 9 | CI/CD + DevSecOps security gates: GitHub Actions pipeline (`.github/workflows/ci.yml`) running six gates on PR→`main` and push→`main` — ruff lint, pytest (with a real `postgres:16-alpine` service; SWaT-gated tests skip), Bandit SAST, pip-audit dependency scan, Gitleaks secret scan, and a real backend Docker build + Trivy image scan. Least-privilege token, SHA-pinned actions, documented fail policy + narrow exceptions (`.trivyignore`, `docs/provenance/phase9_devsecops.md`). Validation only — no cloud/IaC/registry; no ML/threshold/dataset change | **COMPLETE** |
 
 **Actual implementation order:** Phase 2A (SWaT replay + rolling window) was
 built **before** Phase 2B (FastAPI backend). This differs from the numbered
@@ -286,9 +287,16 @@ PostgreSQL mode each verified end-to-end (health → `/score` → both alert cat
 persisted across a backend restart → dashboard reachable), and in PostgreSQL mode
 the data additionally survived a **postgres container restart** via the named volume.
 
+**Phase 9 wires the existing suite and image build into a GitHub Actions
+DevSecOps pipeline** (`.github/workflows/ci.yml`, `docs/provenance/phase9_devsecops.md`)
+with six gates — lint, tests (real PostgreSQL 16 service; SWaT-gated tests skip),
+Bandit SAST, pip-audit, Gitleaks, and a real Docker build + Trivy scan. It adds no
+application tests and changes no ML/threshold/dataset material; in CI the 16
+dataset-gated tests skip and the PostgreSQL suite runs against a service container.
+
 Not started (explicitly out of scope): distributed multi-instance coordination,
-cloud persistence, AWS, Terraform, Kubernetes, CI/CD, notifications, authentication,
-TLS to the database.
+cloud persistence, AWS, Terraform, Kubernetes, registry publishing, notifications,
+authentication, TLS to the database.
 
 ---
 

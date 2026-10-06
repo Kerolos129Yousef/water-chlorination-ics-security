@@ -5,9 +5,10 @@
 This repository is the authoritative source of truth for the current graduation project.
 
 Current branch:
-phase8b-postgres (built on phase8a-docker)
+phase9-devsecops (built on merged main @ 5baeb58)
 
-Phase 8A (Docker containerization) and Phase 8B (PostgreSQL AlertStore) are complete.
+Phase 8A (Docker containerization), Phase 8B (PostgreSQL AlertStore), and
+Phase 9 (CI/CD + DevSecOps security gates) are complete.
 
 Working tree should remain clean before starting new work.
 
@@ -65,6 +66,10 @@ Docker containerization (backend + frontend, SQLite via named volume)
 
 Phase 8B
 PostgreSQL AlertStore (third interchangeable persistence backend)
+
+Phase 9
+CI/CD + DevSecOps security gates (GitHub Actions: lint, tests, SAST,
+dependency/secret/container scanning). Validation only — no cloud/IaC/registry.
 
 ---
 
@@ -235,12 +240,19 @@ After Phase 8A:
 After Phase 8B:
 405 tests passing (+19: real-PostgreSQL integration + docker-packaging for the pg overlay)
 
+Phase 9 (CI/CD) added NO application tests — it wires the existing suite into
+GitHub Actions. The current verified count is 411 (the local baseline grew to
+411 with dataset + Docker present).
+
 Latest verified suite:
-405 passed, 1 warning
+411 passed, 1 warning (local, dataset + Docker present).
+CI-like run (no dataset): 16 dataset-gated tests skip; the PostgreSQL suite runs
+against a postgres:16-alpine service container via ALERT_TEST_PG_DSN.
 
 The Phase 8B PostgreSQL integration tests run against a real postgres:16-alpine
-container (started via Docker) and are skipped only if Docker and ALERT_TEST_PG_DSN
-are both unavailable. The warning was a pre-existing Starlette/httpx deprecation warning.
+container (started via Docker locally, or a service container in CI) and are
+skipped only if Docker and ALERT_TEST_PG_DSN are both unavailable. The warning
+was a pre-existing Starlette/httpx deprecation warning.
 
 When starting new work, ALWAYS run the actual current test suite instead of assuming the old count remains unchanged.
 
@@ -275,6 +287,10 @@ docs/provenance/phase6b_telemetry_fault_alerting.md
 docs/provenance/phase7_alert_persistence.md
 docs/provenance/phase8a_docker.md
 docs/provenance/phase8b_postgres_alertstore.md
+docs/provenance/phase9_devsecops.md
+
+.github/workflows/ci.yml   (the CI/CD pipeline)
+.trivyignore               (documented container-scan exceptions)
 
 The Phase 1 report is documentation only and must not be modified as part of normal engineering phases unless explicitly requested.
 
@@ -293,9 +309,12 @@ The Phase 1 report is documentation only and must not be modified as part of nor
 8. No authentication.
 9. No external notifications.
 10. No TLS to the database / no cloud secret manager (env/.env only).
-11. No CI/CD DevSecOps security gates yet.
+11. CI/CD DevSecOps gates exist (Phase 9), but the container scan blocks only on
+    FIXABLE HIGH/CRITICAL — unfixed base-OS CVEs are reported, not blocking
+    (remediation = hardened base image, Phase 10).
 12. No AWS/Terraform deployment yet.
 13. Kubernetes is not implemented.
+14. No registry publishing — CI builds and scans images but does not push them.
 
 ---
 
@@ -303,12 +322,16 @@ The Phase 1 report is documentation only and must not be modified as part of nor
 
 Next planned phase:
 
-Phase 9 — CI/CD + DevSecOps security gates
+Phase 10 — AWS + Terraform (cloud deployment + IaC)
 
-Goal:
-Automated build/test/scan pipeline for the containerized application. Still no
-cloud/IaC — that is Phase 10+.
+Likely to also address the Phase 9 follow-ups:
+- adopt a hardened/distroless runtime base to drive container HIGH findings toward
+  zero and retire the .trivyignore vendored exceptions;
+- evaluate torch >= 2.13.0, re-run the golden vectors, and retire the 4 documented
+  pip-audit torch exceptions;
+- registry publishing of scanned images.
 
+Phase 9 (CI/CD + DevSecOps gates) is complete and validated on GitHub Actions.
 Phases 8A (Docker) and 8B (PostgreSQL AlertStore) are complete and smoke-tested.
 
 ---
@@ -322,7 +345,7 @@ Phase 8B
 PostgreSQL AlertStore
 
 Phase 9
-CI/CD + DevSecOps security gates
+CI/CD + DevSecOps security gates  ✅ complete
 
 Phase 10
 AWS + Terraform
@@ -350,7 +373,6 @@ Do not import architecture or claims from older reports that describe:
 - WADI production deployment
 - SQLite authentication
 - Kubernetes already implemented
-- six CI/CD gates
 - Prometheus/Grafana already implemented
 
 Those belong to an older/different project report and must not be treated as current implementation.
