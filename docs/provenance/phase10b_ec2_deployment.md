@@ -15,6 +15,16 @@ approves the Terraform plan and then runs the steps in §9.
   (`dashboard_ingress_cidrs = ["0.0.0.0/0"]`); 8000 & 5432 stay closed. Plain
   HTTP, no auth, no TLS → **synthetic, non-sensitive data only** (see §5).
 
+> **Publish-step remediation (branch `fix/frontend-trivy-ci`):** the first
+> publish attempt (Step 1) was blocked because the frontend's `nginx:1.27-alpine`
+> base (Alpine 3.21.3) carried **41 HIGH + 2 CRITICAL fixable** OS CVEs under the
+> Phase 9 Trivy policy; the backend was clean. Fixed by moving the frontend to a
+> maintained **`nginx:1.30.5-alpine3.24`** base + `apk --no-cache upgrade`
+> (both images now scan **0** fixable HIGH/CRITICAL), and by extending **CI Gate 6
+> to scan BOTH images** (it previously scanned only the backend). No findings
+> were suppressed. Images are published from the post-remediation main commit,
+> not `fca8048`.
+
 ---
 
 ## 1. Read-only AWS audit (performed)

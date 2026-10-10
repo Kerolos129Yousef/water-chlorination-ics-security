@@ -12,8 +12,9 @@
 #   * sast      -> Bandit findings at severity>=MEDIUM AND confidence>=HIGH
 #   * deps      -> any pip-audit advisory except the 4 documented torch pins
 #   * secrets   -> any Gitleaks detection (full history)
-#   * container -> any FIXABLE HIGH/CRITICAL (unfixed base-OS CVEs reported,
-#                  not blocking; 6 documented pip/setuptools-vendored exceptions)
+#   * container -> any FIXABLE HIGH/CRITICAL in EITHER the backend OR frontend
+#                  image (unfixed base-OS CVEs reported, not blocking;
+#                  6 documented pip/setuptools-vendored exceptions)
 #
 # Third-party actions are pinned to immutable commit SHAs (tag in trailing
 # comment). Least privilege: read-only token by default; no job needs more.
@@ -212,16 +213,31 @@ jobs:
       # Build the frontend image too (static nginx dashboard) to prove it packs.
       - name: Build frontend image
         run: docker build -f docker/frontend.Dockerfile -t ics-guardian-frontend:ci .
-      # Scan OS packages + application dependencies. Detection stays fully ON
-      # (HIGH,CRITICAL). Blocking is limited to FIXABLE findings (--ignore-unfixed):
-      # the base-image OS CVEs are overwhelmingly unfixed upstream, so blocking on
-      # them would mean disabling detection or forging a base image. The 6
-      # documented pip/setuptools-vendored exceptions live in .trivyignore.
+      # Scan OS packages + application dependencies for BOTH production images.
+      # Detection stays fully ON (HIGH,CRITICAL). Blocking is limited to FIXABLE
+      # findings (--ignore-unfixed): unfixed base-OS CVEs are reported, not
+      # blocking (no upstream fix exists); any FIXABLE HIGH/CRITICAL fails the
+      # gate. The 6 documented pip/setuptools-vendored exceptions live in
+      # .trivyignore. A failure scanning EITHER image fails this job (and so the
+      # final required DevSecOps gate); the step names identify which image.
       - name: Trivy scan (backend image)
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: image
           image-ref: ics-guardian-backend:ci
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
+          format: table
+      # The frontend image (nginx/alpine) is gated too: its base-OS packages must
+      # carry no FIXABLE HIGH/CRITICAL. Same policy and the same .trivyignore.
+      - name: Trivy scan (frontend image)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ics-guardian-frontend:ci
           scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
