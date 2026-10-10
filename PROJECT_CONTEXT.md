@@ -560,9 +560,13 @@ The local end-to-end MVP should work first.
 > is written and validated but **NOT applied to AWS**. Selected design: a single
 > EC2 instance running the existing Docker Compose stack (SQLite), in
 > `eu-central-1` (Frankfurt) — not ECS/Fargate/ALB/RDS, and not `me-central-1`
-> (UAE has no free-tier / T-family instance; only arm64 Graviton, a golden-vector
-> FP risk). Region/size are Terraform variables. Free-Tier eligibility could not
-> be verified, so costs are treated as paid (~$24/mo running 24/7). Full evidence:
+> (UAE has no T-family instance; only arm64 Graviton, a golden-vector FP risk).
+> `me-south-1` (Bahrain) was also evaluated (has T3/T4g, slightly pricier, less
+> mature) — Frankfurt kept. Region/size are Terraform variables. **Public ingress
+> is safe-by-default** (no 80/8000 rule until the owner supplies CIDRs). Free-Tier
+> eligibility for THIS account could not be verified (depends on account creation
+> date/program); costs are given as a conservative PAID estimate (~$24/mo running
+> 24/7, assuming no free tier). Full evidence:
 > `docs/provenance/phase10a_aws_terraform_foundation.md`.
 
 ## Testing

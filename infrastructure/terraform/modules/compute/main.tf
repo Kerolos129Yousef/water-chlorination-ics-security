@@ -40,9 +40,21 @@ resource "aws_iam_instance_profile" "instance" {
 #
 # * IMDSv2 required (http_tokens = required) — blocks SSRF-style metadata theft.
 # * Encrypted gp3 root volume — encryption at rest, cheaper/faster than gp2.
+# * T3 "standard" CPU-credit mode (explicit) — see credit_specification below.
 # * user_data installs Docker + the compose plugin and enables the daemon, so
 #   the node is READY for Phase 10B. It does NOT pull or run the application
 #   (no app deployment in Phase 10A, and no registry credentials on the host).
+#
+# EBS DURABILITY (important, honest statement):
+#   The root volume uses delete_on_termination = true. Therefore:
+#     * STOP/START and REBOOT  -> the root volume (and its SQLite data) PERSIST.
+#     * TERMINATE / REPLACE    -> the root volume is DELETED with the instance;
+#                                 SQLite alert history is LOST.
+#   No EBS snapshots or automated backups are configured in Phase 10A. Before
+#   Phase 10B deploys the app, the owner must decide the SQLite persistence /
+#   backup strategy (e.g. a dedicated encrypted data volume with
+#   delete_on_termination = false, and/or a snapshot/DLM schedule). Those are
+#   recurring-cost resources and are deliberately NOT added here.
 # ---------------------------------------------------------------------------
 resource "aws_instance" "app" {
   ami                    = var.ami_id
@@ -54,6 +66,15 @@ resource "aws_instance" "app" {
   metadata_options {
     http_tokens   = "required"
     http_endpoint = "enabled"
+  }
+
+  # T3 burstable credits: pin "standard" so the instance can NEVER silently
+  # bill surplus CPU-credit charges (the "unlimited" default would). It still
+  # bursts using accrued/launch credits; sustained load beyond baseline just
+  # throttles rather than costing extra — the right trade-off for a learning
+  # /demo box where predictable cost matters more than guaranteed burst.
+  credit_specification {
+    cpu_credits = "standard"
   }
 
   root_block_device {

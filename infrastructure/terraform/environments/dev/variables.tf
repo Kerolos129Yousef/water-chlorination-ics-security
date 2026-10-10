@@ -12,18 +12,27 @@ variable "environment" {
 
 variable "region" {
   description = <<-EOT
-    AWS region. Default eu-central-1 (Frankfurt): the closest full-service region
-    to the UAE that offers free-tier-eligible x86 instance types. The initial
-    candidate me-central-1 (UAE) was rejected for Phase 10A because it offers NO
-    T-family / free-tier-eligible instance and only arm64 Graviton small types
-    (cost + golden-vector FP risk). See PHASE10A docs for the evidence.
+    AWS region. Default eu-central-1 (Frankfurt): a mature full-service region
+    with strong connectivity from Egypt that offers x86 T3 instance types (which
+    AWS lists as Free-Tier-eligible under the current program; actual account
+    eligibility is NOT assumed). me-central-1 (UAE) was rejected: it offers NO
+    T-family instance, only arm64 Graviton small types (higher cost +
+    golden-vector FP risk). me-south-1 (Bahrain) is a viable alternative (has
+    T3/T4g, marginally pricier) but less mature. See the PHASE10A docs for the
+    full evidence and comparison.
   EOT
   type        = string
   default     = "eu-central-1"
 }
 
 variable "instance_type" {
-  description = "EC2 instance type (x86_64 to preserve golden-vector parity)."
+  description = <<-EOT
+    EC2 instance type (x86_64 to preserve golden-vector parity). Default
+    t3.small (2 GiB) gives torch headroom. Free-Tier note: t3.small is listed
+    Free-Tier-eligible only for accounts created on/after 2025-07-15; older
+    accounts get t2.micro/t3.micro only. t3.micro (1 GiB) is eligible under both
+    programs but is RAM-tight for torch. Account eligibility is not assumed.
+  EOT
   type        = string
   default     = "t3.small"
 }
@@ -47,9 +56,15 @@ variable "public_subnet_cidr" {
 }
 
 variable "dashboard_ingress_cidrs" {
-  description = "CIDRs allowed to reach the dashboard (80) and API (8000). Restrict to the operator's IP for a locked-down deployment."
+  description = <<-EOT
+    CIDRs allowed to reach the dashboard (80) and API (8000). SAFE BY DEFAULT:
+    empty -> no public ingress rule is created; the instance is reachable only
+    via SSM Session Manager until the owner supplies approved CIDRs (e.g. their
+    own IP as ["203.0.113.4/32"]). Use ["0.0.0.0/0"] only for a deliberate
+    public demo.
+  EOT
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = []
 }
 
 variable "ssm_ami_parameter" {

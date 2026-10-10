@@ -16,17 +16,30 @@ Latest main commit:
 Phase 10A (AWS architecture + Terraform foundation) is IMPLEMENTED on branch
 `phase10a-terraform-foundation` (not merged into main; NOT applied to AWS).
 It adds `infrastructure/terraform/` (validated: fmt clean, validate OK, plan =
-14 add / 0 change / 0 destroy) and
-`docs/provenance/phase10a_aws_terraform_foundation.md`. No AWS resources were
-created; no Docker images were published; no ECR was introduced.
+12 add / 0 change / 0 destroy with the safe default; 14 once ingress CIDRs are
+supplied) and `docs/provenance/phase10a_aws_terraform_foundation.md`. No AWS
+resources were created; no Docker images were published; no ECR was introduced.
+A pre-merge review commit (points below) refined the original implementation.
 
 Phase 10A decisions (see the provenance doc for full evidence):
 - Architecture: single EC2 + Docker Compose (SQLite), NOT ECS/Fargate/ALB/RDS.
-- Region: eu-central-1 (Frankfurt), NOT me-central-1 — UAE has no free-tier /
-  T-family instance and only arm64 Graviton small types (cost + golden-vector
-  FP risk). Region is a Terraform variable.
-- Free Tier could NOT be positively verified for the account (only "Always Free"
-  entries seen); everything is costed as PAID (~$24/mo running 24/7).
+- Region: eu-central-1 (Frankfurt). Reassessed vs me-central-1 (UAE: no T-family,
+  only arm64 Graviton — cost + golden-vector FP risk) and me-south-1 (Bahrain:
+  has T3/T4g, ~5% pricier, less mature; its region endpoint was unreachable from
+  the working env). Frankfurt kept; region is a Terraform variable.
+- Ingress is SAFE BY DEFAULT: dashboard_ingress_cidrs defaults to [] so NO public
+  80/8000 rule is created until the owner supplies approved CIDRs (SSM-only until
+  then). Mixing 0.0.0.0/0 with other CIDRs is rejected by a validation guard.
+- Free Tier: corrected. Eligibility depends on account creation date/program
+  (pre-2025-07-15 => t2/t3.micro, 12 mo; on/after => t3.micro/small + t4g + flex,
+  6 mo + credits). Public IPv4 is NOT "never free" — AWS gives 750 h/mo free for
+  eligible accounts. THIS account's eligibility is NOT verified; costs are given
+  as a conservative PAID estimate (~$24/mo, assumes no free tier). t3.small is
+  free-tier-eligible only under the new program.
+- Compute hardening: IMDSv2 required, encrypted gp3, T3 cpu_credits="standard"
+  (no surplus-credit charges). SQLite lives on the root volume
+  (delete_on_termination=true): stop/start persists, terminate deletes it; NO
+  snapshots/backups in 10A — persistence/backup decision deferred to 10B.
 - Remote state: S3 backend with native use_lockfile=true (no DynamoDB); the
   state bucket is a separate, not-yet-applied bootstrap config.
 

@@ -7,6 +7,17 @@ region              = "eu-central-1"
 instance_type       = "t3.small"
 root_volume_size_gb = 30
 
-# Lock the dashboard + API down to your own IP for a private demo, e.g.:
-# dashboard_ingress_cidrs = ["203.0.113.4/32"]
-dashboard_ingress_cidrs = ["0.0.0.0/0"]
+# --------------------------------------------------------------------------
+# Ingress is SAFE BY DEFAULT: if you leave dashboard_ingress_cidrs unset (or
+# empty), NO public ingress rule is created and the instance is reachable only
+# via SSM Session Manager. You MUST deliberately opt in to open ports 80/8000.
+#
+# Recommended: your own public IP only. Find it with:  curl -s https://checkip.amazonaws.com
+#   dashboard_ingress_cidrs = ["YOUR.PUBLIC.IP.HERE/32"]
+#
+# Public demo (opens 80 + 8000 to the WHOLE internet — only do this knowingly):
+#   dashboard_ingress_cidrs = ["0.0.0.0/0"]
+#
+# Left intentionally EMPTY here so copying this file does not silently expose
+# the instance to the internet.
+dashboard_ingress_cidrs = []

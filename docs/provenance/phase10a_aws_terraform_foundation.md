@@ -53,7 +53,7 @@ Key facts that shaped the design:
 | Private subnets / NAT | none needed | needed (cost) | none |
 | Secrets for Docker Hub | runtime login on host | Secrets Manager + `repositoryCredentials` | runtime login |
 | Operational burden | low (one box) | high (task defs, roles, target groups, ALB, RDS) | medium |
-| Persistence / recovery | EBS volume + snapshots; redeploy app from image | managed RDS backups | managed RDS backups |
+| Persistence / recovery | SQLite on the gp3 root volume; app is otherwise stateless (redeploy from image). **No snapshots/backups configured in 10A** — see §11 | managed RDS backups | managed RDS backups |
 | Portfolio value | strong: real AWS + Terraform + Docker + SSM + IAM + remote state | strongest but overkill & costly | medium |
 | Fits "cost-conscious graduation demo" | **best** | no (recurring ALB+NAT+RDS even idle) | partial |
 
@@ -65,30 +65,57 @@ ALB, and RDS were explicitly **not** chosen merely for looking production-grade.
 
 ---
 
-## 3. Region decision — `eu-central-1`, NOT `me-central-1`
+## 3. Region decision — `eu-central-1` (reassessed vs `me-central-1` and `me-south-1`)
 
-`me-central-1` (UAE) was the initial candidate. Read-only AWS API inspection
-(account alias `kyz-v2`, region enabled) produced **decisive evidence against it**:
+Three Middle-East-relevant candidates were evaluated with read-only AWS queries
+(account alias `kyz-v2`; all three regions enabled/opted-in for the account).
 
-1. **No free-tier-eligible instance exists in `me-central-1`.**
-   `describe-instance-type-offerings` returns **no T-family** (`t2/t3/t3a/t4g`)
-   types at all. The smallest general-purpose types are **arm64 Graviton**
-   `m6g.medium`/`m7g.medium` (4 GiB) at **$0.0473 / $0.0500 per hr** (~$34–37/mo).
-2. **arm64 is a golden-vector risk.** The cheapest UAE instances are Graviton
-   (arm64). The golden tests are already FP-sensitive across x86 vendors; an
-   arch change is an unnecessary correctness hazard. This project must preserve
-   inference semantics (immutable ML artifacts).
-3. **No verifiable free tier anyway** (§8): even if it mattered, UAE could never
-   be free-tier-covered because it lacks the eligible instance types.
+**`me-central-1` (UAE) — rejected.** `describe-instance-type-offerings` returns
+**no T-family** (`t2/t3/t3a/t4g`) types at all; the smallest general-purpose
+types are **arm64 Graviton** `m6g.medium`/`m7g.medium` (4 GiB) at **$0.0473 /
+$0.0500 per hr** (~$34–37/mo). Two problems: (a) arm64 is a **golden-vector
+risk** — the golden tests are already FP-sensitive across x86 vendors
+(`atol=1e-9`), so an arch change is an unnecessary correctness hazard for
+immutable ML artifacts; (b) higher cost with no cheap x86 option.
 
-`eu-central-1` (Frankfurt) is the **closest full-service region to the UAE** that
-offers free-tier-eligible **x86** types (`t3.micro` $0.012/hr, `t3.small`
-$0.024/hr), 3 AZs, and the AL2023 x86_64 AMI. Region remains a **Terraform
-variable** (`var.region`), so the owner can override it; the default was changed
-with documented evidence rather than silently.
+**`me-south-1` (Bahrain) — viable alternative, not selected.** AWS's published
+EC2 regional table lists **T3/T4g** in Bahrain, and the Pricing API (queried via
+the global `us-east-1` endpoint) confirms real prices: `t3.small` **$0.0251/hr**,
+`t3.micro` $0.0125/hr, `t4g.small` $0.0201/hr, gp3 **$0.0968/GB-mo**.
+*Verification limitation:* direct `me-south-1` region-endpoint calls
+(`describe-availability-zones`, `describe-instance-type-offerings`, SSM AMI
+lookup) **timed out / were unreachable from this working environment** on
+repeated attempts, so per-AZ offering and the AL2023 AMI could not be confirmed
+directly here. They should be re-verified from a working network before
+selecting Bahrain.
 
-> If UAE data-residency is later required, the trade-off is ~$36+/mo on arm64
-> plus re-verifying the golden vectors on Graviton before trusting the model.
+**`eu-central-1` (Frankfurt) — selected.** Directly verified: 3 AZs, AL2023
+x86_64 AMI resolves live via SSM, `t3.small` offered in all AZs. Pricing:
+`t3.small` **$0.0240/hr**, `t3.micro` $0.0120/hr, gp3 **$0.0952/GB-mo**.
+
+### Frankfurt vs Bahrain — why Frankfurt stays the default
+
+| Factor | Frankfurt (`eu-central-1`) | Bahrain (`me-south-1`) |
+|---|---|---|
+| `t3.small` on-demand | **$0.0240/hr** | $0.0251/hr (~5% more) |
+| gp3 storage | **$0.0952/GB-mo** | $0.0968/GB-mo (~2% more) |
+| x86 T3 available | **yes (verified directly)** | yes (price-confirmed; endpoint probe failed here) |
+| Region maturity / service breadth | **very high** (matters for 10C/10D) | smaller/newer region |
+| Reachability from this tooling env | **reliable** | endpoint calls timed out |
+| Latency from **Egypt** (demo audience) | excellent (major EU peering; ~60–80 ms) | geographically closer but comparable for a demo |
+| Golden-vector safety (x86) | **yes** | yes |
+
+Bahrain's only real edge is slight geographic proximity to Egypt, which is not
+decisive for an interactive demo (both are well under 100 ms). Frankfurt is
+marginally cheaper, far more mature (full service coverage for later phases),
+and was fully verifiable from the working environment. **Region remains a
+Terraform variable (`var.region`)**; switching to `me-south-1` is a one-line
+change if GCC/UAE proximity later becomes a hard requirement — re-verify its AZs
+and AMI from a working network first.
+
+> If UAE **data-residency** specifically is later required, the trade-off is
+> ~$36+/mo on arm64 Graviton in `me-central-1` **plus** re-verifying the golden
+> vectors on Graviton before trusting the model.
 
 ---
 
@@ -100,18 +127,30 @@ Region `eu-central-1`, AZ chosen from a data source (not hard-coded):
   subnet (`/28`), Internet Gateway, public route table + default route. **No**
   private subnets, **no NAT Gateway**, **no ALB** — not needed for one node.
 - **Security group**: inbound **80** (dashboard) and **8000** (API) only, each
-  restricted to `var.dashboard_ingress_cidrs` (default `0.0.0.0/0` for a public
-  portfolio demo; set to your `/32` to lock it down). **No inbound 22. No
-  inbound 5432.** Egress all (Docker Hub pulls, OS updates, SSM).
+  restricted to `var.dashboard_ingress_cidrs`. **SAFE BY DEFAULT: that list is
+  EMPTY (`[]`)**, so **no public ingress rule is created** until the owner
+  explicitly supplies approved CIDRs — the instance is then reachable only via
+  SSM. A validation rule forbids mixing `0.0.0.0/0` with other CIDRs so
+  "open to the world" is always a deliberate, standalone choice. **No inbound
+  22. No inbound 5432.** Egress all (Docker Hub pulls, OS updates, SSM).
 - **Compute** (`modules/compute`): `t3.small` (x86_64, 2 GiB), AL2023 AMI
-  resolved live from the SSM public parameter, **IMDSv2 required**, **encrypted
-  gp3** 30 GiB root. `user_data` installs Docker + compose plugin and enables the
-  daemon — it makes the node **ready**; it does **not** pull or run the app.
+  resolved live from the SSM public parameter, **IMDSv2 required**, T3 CPU
+  credits pinned to **`standard`** (never bills surplus-credit charges; see §12),
+  **encrypted gp3** 30 GiB root. `user_data` installs Docker + compose plugin and
+  enables the daemon — it makes the node **ready**; it does **not** pull or run
+  the app.
 - **IAM**: an instance role whose **only** policy is the AWS-managed
   `AmazonSSMManagedInstanceCore` (least privilege; enables Session Manager, no
   SSH). **No admin, no wildcards.**
+- **Persistence (honest statement):** SQLite lives on the gp3 **root** volume
+  (`delete_on_termination = true`). Stop/start and reboot preserve it;
+  **terminating or replacing the instance deletes it**, and **no snapshots or
+  backups are configured in 10A**. The persistence/backup decision is required
+  before 10B deploys the app — see §11.
 
-Resource plan: **14 to add, 0 to change, 0 to destroy** (§7).
+Resource plan: **14 to add, 0 to change, 0 to destroy** (§7). With the default
+empty ingress list the plan creates **12** resources (the 2 SG ingress rules are
+omitted until CIDRs are supplied).
 
 ---
 
@@ -142,10 +181,21 @@ backend  --Docker network--> postgres:5432           (only if pg overlay used; n
 EC2      --egress 443/80--> Docker Hub, OS mirrors, SSM endpoints (via IGW)
 ```
 
+With the **safe default** (`dashboard_ingress_cidrs = []`) neither `:80` nor
+`:8000` is open — the flows above exist only after the owner supplies CIDRs.
+
 Hardening already encoded: IMDSv2 required, encrypted EBS, SSM instead of SSH,
-least-privilege instance role, DB port never in the security group. Dropping the
-public `8000` behind an nginx reverse proxy (single port 80/443) is a **10B/10D**
-option noted for later; it requires an app/proxy change, so it is not done here.
+least-privilege instance role, DB port never in the security group, no public
+ingress until explicitly requested.
+
+**Recommended for Phase 10B/10D — single web entry point.** Putting the API
+behind the nginx frontend (one port 80/443, `location /api/` → `backend:8000`)
+would let us stop exposing `8000` publicly. **This is NOT done here and must not
+be done blindly:** the dashboard currently calls the API **directly from the
+browser**, and `backend/app.py` CORS only allow-lists `localhost:5500/8080`.
+Before consolidating, 10B must (a) point the dashboard's fetch base at the
+same-origin `/api` path and (b) set the real public origin in CORS (or make the
+calls same-origin so CORS is moot). Application behavior is unchanged in 10A.
 
 ---
 
@@ -156,49 +206,92 @@ option noted for later; it requires an app/proxy change, so it is not done here.
 | `terraform fmt -recursive` | clean (no diffs) |
 | `terraform validate` (dev) | **Success! The configuration is valid.** |
 | `terraform validate` (bootstrap) | **Success! The configuration is valid.** |
-| `terraform plan` (local backend, read-only) | **Plan: 14 to add, 0 to change, 0 to destroy** |
+| `terraform plan` — **default (empty ingress)** | **Plan: 12 to add, 0 to change, 0 to destroy** |
+| `terraform plan` — with one `/32` ingress CIDR | **Plan: 14 to add** (adds the 2 SG rules) |
+| `terraform plan` — `["0.0.0.0/0","/32"]` (guard test) | **Rejected**: "If you open to 0.0.0.0/0, it must be the only CIDR…" |
+| `cpu_credits` in plan | `"standard"` (no surplus-credit billing) |
 | AWS provider resolved | `hashicorp/aws v6.68.0` (locked in `.terraform.lock.hcl`) |
 | Ruff gate (`E9,F`) | All checks passed |
 | Bandit gate (sev≥medium, conf≥high) | no findings (exit 0) |
 | Test suite (`pytest -q`) | **411 passed, 1 pre-existing warning** (unchanged baseline) |
-| Protected ML artifacts / golden fixtures | **unchanged** (git shows only `.gitignore` + `infrastructure/`) |
+| Protected ML artifacts / golden fixtures | **unchanged** |
 
-The `plan` was produced with a **temporary local backend override** so no S3
+The `plan`s were produced with a **temporary local backend override** so no S3
 state bucket was created; the override and its local state were removed
-afterwards. The 14 planned resources: VPC, IGW, subnet, route table, route,
-route-table association, security group, 3 SG rules, IAM role, role-policy
-attachment, instance profile, EC2 instance.
+afterwards. The **12** default resources: VPC, IGW, subnet, route table, route,
+route-table association, security group, egress rule, IAM role, role-policy
+attachment, instance profile, EC2 instance. Supplying `dashboard_ingress_cidrs`
+adds the 2 ingress rules (→ 14).
 
 ---
 
 ## 8. Cost model & Free-Tier reality
 
-**Free-Tier eligibility could NOT be positively verified for this account.**
-The Free Tier API (`freetier get-free-tier-usage`) returned **only "Always Free"**
-entries (SNS/SQS/Glue/KMS) and **zero "12 Months Free"** records. This does not
-prove the 12-month EC2/EBS free tier is absent, but there is **no evidence it is
-active**, and the owner must confirm in the Billing console. **Per project policy
-we therefore cost everything as PAID** and do not claim any EC2/EBS is free.
+### How AWS Free Tier actually works (corrected)
 
-Recommended deployment, `eu-central-1`, running 24/7 (verified unit prices):
+Per current AWS documentation
+([EC2 Free Tier](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-free-tier-usage.html),
+[Billing Free Tier](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier.html)),
+benefits depend on **when the account was created** and **which program** it is on:
 
-| Item | Unit price | Monthly (730 h) |
+| | Account created **before 2025-07-15** | Account created **on/after 2025-07-15** |
 |---|---|---|
-| EC2 `t3.small` (on-demand, Linux) | $0.0240/hr | **$17.52** |
+| Free-Tier-eligible instance types | `t2.micro`, `t3.micro` | `t3.micro`, **`t3.small`**, `t4g.micro`, `t4g.small`, `c7i-flex.large`, `m7i-flex.large` |
+| EBS eligible | `gp2`/`gp3`/`standard`/`st1`/`sc1` | same |
+| Duration / model | **12 months**, usage-limited (overage billed pay-as-you-go) | **6 months** or until **$100 (+up to $100)** credits exhausted |
+
+**Public IPv4 is NOT "never free."** AWS documents a Free-Tier allowance of
+**750 hours/month of in-use public IPv4 address at no charge** for eligible
+Free-Tier accounts (introduced with the Feb 2024 IPv4 charge); outside that
+allowance the standard rate is **$0.005/hr** (≈ $3.65/mo for one always-on
+address). An earlier draft of this doc incorrectly stated the IPv4 charge is
+never waived — that was wrong.
+
+### This account — what is and isn't verified
+
+- **Verified (read-only):** the account has **"Always Free"** offers active
+  (SNS/SQS/Glue/KMS); `describe-instance-types --filters free-tier-eligible`
+  returns the **current-program** catalog list (`t3.micro/small`, `t4g.*`,
+  `c7i-flex.large`, `m7i-flex.large`).
+- **NOT verified:** the account's **creation date**, **program** (12-month vs
+  the new credit plan), **remaining credits**, and therefore whether *this*
+  account is currently Free-Tier-eligible for EC2/EBS/IPv4. The Free Tier usage
+  API showed no "12 Months Free" records, which is **consistent with either** a
+  post-July-2025 credit-plan account **or** an account past its 12-month window
+  — it does not distinguish them. Confirm in the **Billing console**
+  (EC2 dashboard "Free Tier" box / Billing → Free Tier).
+
+**Eligibility note on the default type:** `t3.small` is Free-Tier-eligible
+**only** under the new (post-2025-07-15) program. If this account is on the
+legacy 12-month tier, only `t2.micro`/`t3.micro` are eligible — switch
+`instance_type` to `t3.micro` to stay within free limits (note: 1 GiB RAM is
+tight for torch; add swap or accept the ~$17.5/mo paid `t3.small`).
+
+### Conservative PAID estimate (assume no Free Tier applies)
+
+The figures below **assume zero Free-Tier benefit** — a deliberately
+conservative upper bound. If the account *is* eligible, some/all of the EC2,
+EBS, and the first 750 h of IPv4 could be covered, reducing this materially;
+those savings are **not guaranteed** and are not assumed here.
+
+| Item | Unit price (Frankfurt, verified) | Monthly (730 h) |
+|---|---|---|
+| EC2 `t3.small` (on-demand, Linux, standard credits) | $0.0240/hr | **$17.52** |
 | EBS gp3 root, 30 GiB | $0.0952/GB-mo | **$2.86** |
-| Public IPv4 address (in-use) | $0.005/hr | **$3.65** |
+| Public IPv4 address (in-use, if not Free-Tier-covered) | $0.005/hr | **$3.65** |
 | S3 remote state (tiny, versioned) | ~usage | **~$0.01** |
-| Data transfer out | 100 GB/mo free, then $0.09/GB | **~$0** (demo) |
-| **Total (always-on)** | | **≈ $24 / month** |
+| Data transfer out (demo volume) | first 100 GB/mo free, then $0.09/GB | **~$0** |
+| **Total (always-on, paid assumption)** | | **≈ $24 / month** |
 
 Cost-control notes:
 
-- **Billed continuously while running:** EC2 compute, the public IPv4 address.
+- **Billed continuously while running (paid assumption):** EC2 compute + the
+  public IPv4 address.
 - **Billed even when stopped:** the **EBS volume** (~$2.86/mo). Stopping the
-  instance releases the auto-assigned public IPv4 (no IPv4 charge while stopped).
-  → **Stop the instance between demos** to drop to ~$3/mo.
-- **If the 12-mo free tier *is* active** and `t3.micro` is used: 750 h compute
-  and 30 GB EBS could be \$0, but the **public IPv4 (~$3.65/mo) is never free**.
+  instance releases the auto-assigned public IPv4 (no IPv4 charge while stopped)
+  → **stop between demos** to drop to ~$3/mo.
+- **T3 credits:** `cpu_credits = "standard"` is set explicitly, so there is **no
+  surplus/"unlimited" credit charge** (see §12).
 - **No** EKS/WAF/CloudFront/Route 53/ElastiCache/OpenSearch/NAT/multi-region/ALB
   is created — each avoided on cost grounds.
 
@@ -268,13 +361,57 @@ terraform destroy      # VPC, instance, EBS, IAM role/profile, SG
 ## 10. Deferred to Phase 10B / 10C / 10D
 
 - **10B:** choose/publish Docker Hub repo names, build + push images, deploy the
-  compose stack on the instance, wire the real public **CORS origin**, verify the
-  app end-to-end, decide SQLite vs PostgreSQL-on-instance + EBS snapshot backups.
+  compose stack on the instance, **wire the single web entry point / CORS origin**
+  (see §6), **make the SQLite persistence + backup decision** (see §11), and
+  verify the app end-to-end.
 - **10C:** extend the GitHub Actions workflow to deploy **after** the Phase 9
   gates pass, using **GitHub OIDC → a scoped IAM role** (no long-lived AWS keys
   in repo secrets).
 - **10D:** runtime/IAM hardening, address Phase 9 container findings (hardened
   base image) and the documented torch dependency exceptions, logging/monitoring,
-  optional nginx reverse proxy to retire the public `8000`, EBS snapshot/DLM.
+  nginx reverse proxy to retire the public `8000`, EBS snapshot/DLM.
 
 Nothing in 10B–10D is implemented in this phase.
+
+---
+
+## 11. SQLite persistence & EBS durability — decision required before 10B
+
+Phase 10A uses an **encrypted gp3 root volume with `delete_on_termination =
+true`**. Honest behavior:
+
+- **Reboot** and **stop/start** → the root volume and its SQLite alert DB
+  **persist**.
+- **Terminate / replace** the instance (incl. a Terraform change that forces
+  replacement) → the root volume is **deleted**, and **SQLite alert history is
+  lost**.
+- **No EBS snapshots or automated backups are configured in Phase 10A.** There
+  is no snapshot-based recovery available yet.
+
+The app itself is otherwise **stateless** (immutable model + image), so only the
+alert history is at risk. Before 10B deploys the application, the owner must
+pick a persistence/backup approach, e.g.:
+
+1. **Dedicated encrypted data volume** for `/data` with
+   `delete_on_termination = false` (survives instance replacement), or
+2. a **snapshot/DLM schedule** on the volume, or
+3. **PostgreSQL** (the existing overlay) on the instance with its own durable
+   volume, or
+4. explicitly accept that alert history is **ephemeral** for the demo.
+
+Each of 1–3 adds recurring cost, so **none is added in this correction commit**
+— the choice is deferred to 10B by design.
+
+---
+
+## 12. T3 CPU-credit mode
+
+The instance pins `credit_specification { cpu_credits = "standard" }`. T3 is a
+**burstable** family: in the default **`unlimited`** mode, sustained CPU above
+the baseline silently bills **surplus credits** — an easy way to get surprise
+charges on a demo box. **`standard`** mode bursts only on accrued/launch credits
+and then **throttles to baseline instead of charging extra**, giving predictable
+cost. Trade-off: a heavy sustained workload would be throttled rather than
+guaranteed full burst — acceptable for a learning/portfolio deployment where
+cost predictability matters more. Switch back to `unlimited` deliberately if a
+real latency SLA ever requires guaranteed burst.

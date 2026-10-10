@@ -23,11 +23,21 @@ variable "availability_zone" {
 variable "dashboard_ingress_cidrs" {
   description = <<-EOT
     CIDRs allowed to reach the dashboard (TCP 80) and the API (TCP 8000).
-    Defaults to the whole internet for a public portfolio demo; restrict to the
-    operator's IP (e.g. ["203.0.113.4/32"]) for a locked-down deployment.
+    SAFE BY DEFAULT: empty, so NO public ingress rule is created and the box is
+    reachable only via SSM Session Manager. The owner must explicitly supply
+    approved CIDRs (e.g. ["203.0.113.4/32"] for their own IP) to open ingress.
+    Setting ["0.0.0.0/0"] opens it to the whole internet — only do that
+    deliberately for a public demo.
   EOT
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = []
+
+  validation {
+    # Guard-rail: forbid a partial/overly-broad CIDR mix. If 0.0.0.0/0 is used
+    # it must be the ONLY entry (makes "open to the world" an explicit choice).
+    condition     = !contains(var.dashboard_ingress_cidrs, "0.0.0.0/0") || length(var.dashboard_ingress_cidrs) == 1
+    error_message = "If you open to 0.0.0.0/0, it must be the only CIDR in the list (explicit all-internet choice)."
+  }
 }
 
 variable "api_port" {
