@@ -32,6 +32,7 @@ research/
 scripts/
 docs/
 infrastructure/
+deploy/
 .github/
 *.pdf
 *.md
