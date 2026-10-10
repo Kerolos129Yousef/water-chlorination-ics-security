@@ -7,19 +7,24 @@ This repository is the authoritative source of truth for the current graduation 
 Current branch:
 main
 
-Phase 8A (Docker containerization), Phase 8B (PostgreSQL AlertStore), and
-Phase 9 (CI/CD + DevSecOps security gates) are complete and merged into main.
+Phase 8A (Docker containerization), Phase 8B (PostgreSQL AlertStore),
+Phase 9 (CI/CD + DevSecOps security gates), and Phase 10A (AWS architecture +
+Terraform foundation) are complete and merged into main.
 
 Latest main commit:
-9d73cb3 (docs(handoff): reflect Phase 9 merged into main via PR #5)
+5e25773 (Merge pull request #6 from Kerolos129Yousef/phase10a-terraform-foundation)
 
-Phase 10A (AWS architecture + Terraform foundation) is IMPLEMENTED on branch
-`phase10a-terraform-foundation` (not merged into main; NOT applied to AWS).
+Phase 10A (AWS architecture + Terraform foundation) is MERGED into main via
+PR #6. The infrastructure is DEFINED IN CODE ONLY — it has NOT been deployed:
+no `terraform apply` has run, and read-only AWS checks confirm no ics-guardian
+VPC, EC2 instance, or state bucket exists. No Docker images were published; no
+ECR was introduced.
 It adds `infrastructure/terraform/` (validated: fmt clean, validate OK, plan =
 12 add / 0 change / 0 destroy with the safe default; 14 once ingress CIDRs are
-supplied) and `docs/provenance/phase10a_aws_terraform_foundation.md`. No AWS
-resources were created; no Docker images were published; no ECR was introduced.
-A pre-merge review commit (points below) refined the original implementation.
+supplied) and `docs/provenance/phase10a_aws_terraform_foundation.md`. All six
+DevSecOps gates were green on the merged commit (a merge-time fix pinned
+urllib3 to 2.8.0 and documented two pip-vendored urllib3 HIGH CVEs as
+non-reachable Trivy exceptions — see `.trivyignore` and the provenance doc §13).
 
 Phase 10A decisions (see the provenance doc for full evidence):
 - Architecture: single EC2 + Docker Compose (SQLite), NOT ECS/Fargate/ALB/RDS.
