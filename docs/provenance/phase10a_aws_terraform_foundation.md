@@ -415,3 +415,27 @@ cost. Trade-off: a heavy sustained workload would be throttled rather than
 guaranteed full burst — acceptable for a learning/portfolio deployment where
 cost predictability matters more. Switch back to `unlimited` deliberately if a
 real latency SLA ever requires guaranteed burst.
+
+---
+
+## 13. Merge-time container-scan remediation (urllib3)
+
+While merging this branch, the Phase 9 Trivy gate (Gate 6) flagged two **fixable
+HIGH** CVEs in `urllib3 2.7.0` (`CVE-2026-97687` HTTPS-proxy TLS interception;
+`CVE-2026-97689` DoS) — newly published since Phase 9 last ran, unrelated to the
+Phase 10A diff. Remediation (both verified by inspecting the built image):
+
+1. **Pinned the importable copy** to the patched release:
+   `urllib3==2.8.0` in `docker/requirements-runtime.txt`. Trivy then reports **0**
+   findings for `/opt/venv/.../urllib3-2.8.0.dist-info`. Not on the ML inference
+   path → golden vectors unaffected; `pip-audit` (Gate 4) stays clean.
+2. **Documented the remaining copy as a non-reachable exception.** The only
+   remaining 2.7.0 is **pip's vendored** `pip/_vendor/urllib3` (confirmed via its
+   `_version.py`/`vendor.txt`). pip is **never executed** in the immutable,
+   non-root, read-only runtime container (`CMD` is `uvicorn` only), and both CVEs
+   require urllib3 to make HTTP requests, which happens only at `pip install`
+   time. Added `CVE-2026-97687` + `CVE-2026-97689` to `.trivyignore` with that
+   justification — the same class as the 4 pre-existing pip/setuptools-vendored
+   entries (so 6 total). The documented Phase 10 follow-up (slim/distroless base
+   with no pip in the runtime layer) removes this vendored copy and lets all such
+   entries be deleted. No gate policy was weakened.

@@ -13,7 +13,7 @@
 #   * deps      -> any pip-audit advisory except the 4 documented torch pins
 #   * secrets   -> any Gitleaks detection (full history)
 #   * container -> any FIXABLE HIGH/CRITICAL (unfixed base-OS CVEs reported,
-#                  not blocking; 4 documented pip/setuptools-vendored exceptions)
+#                  not blocking; 6 documented pip/setuptools-vendored exceptions)
 #
 # Third-party actions are pinned to immutable commit SHAs (tag in trailing
 # comment). Least privilege: read-only token by default; no job needs more.
@@ -215,7 +215,7 @@ jobs:
       # Scan OS packages + application dependencies. Detection stays fully ON
       # (HIGH,CRITICAL). Blocking is limited to FIXABLE findings (--ignore-unfixed):
       # the base-image OS CVEs are overwhelmingly unfixed upstream, so blocking on
-      # them would mean disabling detection or forging a base image. The 4
+      # them would mean disabling detection or forging a base image. The 6
       # documented pip/setuptools-vendored exceptions live in .trivyignore.
       - name: Trivy scan (backend image)
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
