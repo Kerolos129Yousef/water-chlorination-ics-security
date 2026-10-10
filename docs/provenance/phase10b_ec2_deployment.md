@@ -11,6 +11,9 @@ approves the Terraform plan and then runs the steps in §9.
   data volume mounted at `/data`.
 - **Registry:** Docker Hub `kerolosyousef`, **public** repos (owner-approved).
 - **Region / instance:** `eu-central-1`, `t3.small` x86_64, AL2023 (from Phase 10A).
+- **Exposure (owner-approved 2026-10-10):** worldwide HTTP on **TCP 80 only**
+  (`dashboard_ingress_cidrs = ["0.0.0.0/0"]`); 8000 & 5432 stay closed. Plain
+  HTTP, no auth, no TLS → **synthetic, non-sensitive data only** (see §5).
 
 ---
 
@@ -118,16 +121,21 @@ Credentials / DB contents are never committed (SQLite files are git-ignored).
   (the Phase 10A `backend_api`/port-8000 ingress rule was **removed** this phase —
   the backend is reachable only via the nginx proxy on the private network).
   **PostgreSQL 5432 is never opened.**
-- **Ingress CIDR:** Terraform default stays **`[]`** (no public rule). The owner
-  approved **public** exposure, so the apply passes
-  `-var 'dashboard_ingress_cidrs=["0.0.0.0/0"]'` **explicitly** (not baked into a
+- **Ingress CIDR — OWNER-APPROVED PUBLIC (2026-10-10):** the owner formally
+  approved **worldwide HTTP access on TCP 80 only** for multi-person demo
+  testing. The Terraform module default stays **`[]`** (fail-safe); the approved
+  value is passed **explicitly** at apply:
+  `-var 'dashboard_ingress_cidrs=["0.0.0.0/0"]'` (visible/reviewed each run, not a
   committed default). A validation guard rejects mixing `0.0.0.0/0` with other
-  CIDRs. To lock down later, set it to your `/32` — no redeploy of the app needed.
-  - **Security implication of public `0.0.0.0/0:80`:** the dashboard and the
-    proxied read-only API become world-reachable over plain HTTP. The app has
-    **no authentication**; treat all displayed data as public. `/score` (POST) is
-    also reachable via `/api/score`. Mitigations if desired: restrict the CIDR,
-    or add auth/TLS (future work).
+  CIDRs. To lock down later, set it to a `/32` — no app redeploy needed. The
+  approval covers **only** TCP 80; 8000 and 5432 stay closed.
+  - **Security implications of public `0.0.0.0/0:80` (accepted):** the dashboard
+    and the proxied API become world-reachable over **plain HTTP with NO
+    authentication and NO TLS**. `/score` (POST) is reachable via `/api/score`.
+    **Operating rule: the demo MUST handle only SYNTHETIC, non-sensitive
+    telemetry — never real or confidential data.** Mitigations when wanted:
+    restrict the CIDR to known IPs, add authentication, and add TLS (a domain +
+    certificate) — all deferred (future work / Phase 10C+).
 - **No inbound SSH.** Administration is via **SSM Session Manager**, using the
   Phase 10A instance role (`AmazonSSMManagedInstanceCore` only — least privilege,
   unchanged). Egress is open for Docker Hub pulls, OS updates, and SSM. **No NAT

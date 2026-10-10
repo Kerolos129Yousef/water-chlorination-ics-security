@@ -36,10 +36,14 @@ same-origin `/api` base), a dedicated encrypted EBS **data volume** mounted at
 port 80), adds `deploy/docker-compose.aws.yml` + `deploy/deploy.sh` (SSM-driven,
 public Docker Hub images, no secrets), and
 `docs/provenance/phase10b_ec2_deployment.md` (full runbook + costs ≈ $24.8/mo).
-Owner decisions captured: Docker Hub repos = PUBLIC; initial exposure = public
-`0.0.0.0/0:80` (passed explicitly at apply; Terraform default stays `[]`).
+Owner decisions captured: Docker Hub repos = PUBLIC; exposure = **worldwide HTTP
+on TCP 80 only — FORMALLY APPROVED 2026-10-10** (`dashboard_ingress_cidrs =
+["0.0.0.0/0"]`, passed explicitly at apply; Terraform default stays `[]`; 8000 &
+5432 never public; plain HTTP/no-auth → synthetic data only).
 Plan (not applied): 14 add default / 15 add with the approved public port-80
-ingress. Awaiting owner approval to publish images, apply, and deploy.
+ingress (the sole ingress rule). Remaining before go-live: publish the public
+commit-SHA images (interactive `docker login`), bootstrap state bucket, apply,
+deploy via SSM, verify E2E. PR #7 open, all 6 gates green; not merged.
 
 Phase 10A decisions (see the provenance doc for full evidence):
 - Architecture: single EC2 + Docker Compose (SQLite), NOT ECS/Fargate/ALB/RDS.
