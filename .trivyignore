@@ -33,3 +33,17 @@ CVE-2026-23949
 # msgpack OOB read on Unpacker reuse - vendored by pip; the application request
 # path uses JSON/pydantic, never msgpack, and pip is not run at runtime.
 GHSA-6v7p-g79w-8964
+
+# urllib3 (two HIGH) vendored by pip at pip/_vendor/urllib3 == 2.7.0. Confirmed by
+# inspecting the built image: the IMPORTABLE urllib3 is pinned to 2.8.0 (patched;
+# docker/requirements-runtime.txt), 0 findings. The only flagged copy is the one
+# pip bundles for its OWN installer HTTP client. Both CVEs require urllib3 to make
+# HTTP requests, which happens only during `pip install`; pip is NEVER invoked in
+# the immutable, non-root, read-only runtime container (CMD is uvicorn only). Same
+# class as the pip/setuptools-vendored entries above. Reviewed 2026-10-10.
+# FOLLOW-UP (Phase 10): the planned slim/distroless base that ships no pip in the
+# runtime layer removes this vendored copy entirely; delete these two then.
+# CVE-2026-97687: urllib3 traffic interception via HTTPS proxy TLS (fixed 2.8.0).
+CVE-2026-97687
+# CVE-2026-97689: urllib3 DoS via unbounded memory (fixed 2.8.0).
+CVE-2026-97689

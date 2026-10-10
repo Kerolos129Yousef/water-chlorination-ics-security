@@ -30,3 +30,13 @@ uvicorn[standard]==0.52.4
 # and sqlite backends import it lazily and never require it.
 psycopg[binary]==3.2.10
 psycopg-pool==3.2.6
+
+# --- Security floor for a transitive dependency (Phase 10A review) ---
+# urllib3 enters the image transitively (via requests, pulled by the torch
+# install toolchain); requests constrains it to <3,>=1.26. We pin it UP to the
+# patched release to clear two FIXABLE HIGH CVEs flagged by the Trivy container
+# gate (Gate 6): CVE-2026-97687 (HTTPS-proxy TLS interception) and
+# CVE-2026-97689 (DoS via unbounded memory), both fixed in 2.8.0. urllib3 is NOT
+# on the ML inference path, so golden-vector reproducibility is unaffected. Bump
+# this floor if a later advisory supersedes it.
+urllib3==2.8.0

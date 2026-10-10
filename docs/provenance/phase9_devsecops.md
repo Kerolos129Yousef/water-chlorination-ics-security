@@ -169,7 +169,10 @@ Dataset-gated tests (skip in CI): 16 tests across `tests/test_dataset.py` and
     Remediation belongs to the base image and is scheduled for Phase 10
     (hardened/distroless base).
 - **Current result with policy:** Trivy exit `0` (clean) - the only fixable HIGH
-  findings are the four documented pip/setuptools-vendored exceptions.
+  findings are the documented pip/setuptools-vendored exceptions (four at Phase 9;
+  **six as of 2026-10-10**, after two pip-vendored `urllib3` HIGH CVEs were added
+  during the Phase 10A review - see `.trivyignore` and
+  `phase10a_aws_terraform_foundation.md`).
 
 ---
 
@@ -182,7 +185,7 @@ Dataset-gated tests (skip in CI): 16 tests across `tests/test_dataset.py` and
 | SAST | bandit 1.9.4 | severity>=MEDIUM AND confidence>=HIGH | pass |
 | Deps | pip-audit 2.10.1 | any advisory except 4 documented torch pins | pass |
 | Secrets | gitleaks 8.30.1 | any detection (full history) | pass |
-| Container | Trivy (action v0.36.0) | any fixable HIGH/CRITICAL except 4 documented `.trivyignore` | pass |
+| Container | Trivy (action v0.36.0) | any fixable HIGH/CRITICAL except documented `.trivyignore` (4 at Phase 9; 6 as of 2026-10-10) | pass |
 
 ---
 

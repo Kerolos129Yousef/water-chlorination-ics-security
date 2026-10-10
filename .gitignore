@@ -11,3 +11,27 @@ __pycache__/
 *.sqlite3-shm
 *.sqlite
 *.db
+
+# Phase 10: Terraform / IaC hygiene (never commit state, plans, or local creds)
+# Provider plugins and module caches (re-downloaded by `terraform init`).
+**/.terraform/
+# State and backups (remote state lives in S3; never commit local copies).
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+# Saved/generated plan files (may embed resolved values).
+*.tfplan
+*.tfplan.*
+plan.out
+# crash logs
+crash.log
+crash.*.log
+# Secret-bearing variable files. The committed *.example files are templates.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+# Cloud / CLI credential material (defense-in-depth; never commit).
+.aws/
+*.pem
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — it is committed so
+# provider versions are reproducible across machines and CI.
