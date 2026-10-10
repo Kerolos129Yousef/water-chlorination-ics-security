@@ -8,11 +8,12 @@ Current branch:
 main
 
 Phase 8A (Docker containerization), Phase 8B (PostgreSQL AlertStore),
-Phase 9 (CI/CD + DevSecOps security gates), and Phase 10A (AWS architecture +
-Terraform foundation) are complete and merged into main.
+Phase 9 (CI/CD + DevSecOps security gates), Phase 10A (AWS architecture +
+Terraform foundation), and Phase 10B (EC2 deployment PREPARATION) are complete
+and merged into main.
 
 Latest main commit:
-5e25773 (Merge pull request #6 from Kerolos129Yousef/phase10a-terraform-foundation)
+f5c8d5f (Merge pull request #7 from Kerolos129Yousef/phase10b-ec2-deployment)
 
 Phase 10A (AWS architecture + Terraform foundation) is MERGED into main via
 PR #6. The infrastructure is DEFINED IN CODE ONLY — it has NOT been deployed:
@@ -26,9 +27,11 @@ DevSecOps gates were green on the merged commit (a merge-time fix pinned
 urllib3 to 2.8.0 and documented two pip-vendored urllib3 HIGH CVEs as
 non-reachable Trivy exceptions — see `.trivyignore` and the provenance doc §13).
 
-Phase 10B (EC2 deployment via Docker Hub) is PREPARED on branch
-`phase10b-ec2-deployment` (not merged; NOTHING deployed, no `terraform apply`,
-no images published). It adds a single web entry point (nginx reverse-proxies
+Phase 10B (EC2 deployment via Docker Hub) is PREPARED and MERGED into main via
+PR #7 (code only; NOTHING deployed, no `terraform apply`, no images published,
+no state bucket). Read-only AWS checks confirm 0 ics-guardian VPCs/instances,
+0 state buckets; both Docker Hub repos are still absent (HTTP 404). It adds a
+single web entry point (nginx reverse-proxies
 `/api/` to the backend over the private Docker network; the dashboard now uses a
 same-origin `/api` base), a dedicated encrypted EBS **data volume** mounted at
 `/data` for durable SQLite (survives instance terminate/replace; deleted only by
@@ -41,9 +44,11 @@ on TCP 80 only — FORMALLY APPROVED 2026-10-10** (`dashboard_ingress_cidrs =
 ["0.0.0.0/0"]`, passed explicitly at apply; Terraform default stays `[]`; 8000 &
 5432 never public; plain HTTP/no-auth → synthetic data only).
 Plan (not applied): 14 add default / 15 add with the approved public port-80
-ingress (the sole ingress rule). Remaining before go-live: publish the public
-commit-SHA images (interactive `docker login`), bootstrap state bucket, apply,
-deploy via SSM, verify E2E. PR #7 open, all 6 gates green; not merged.
+ingress (the sole ingress rule). Remaining before go-live (all deferred, owner
+to run): publish the public commit-SHA images (interactive `docker login`),
+bootstrap the state bucket, `terraform apply`, deploy via SSM, verify E2E —
+exact commands in `docs/provenance/phase10b_ec2_deployment.md` §9.
+Next phase after that: Phase 10C (CI/CD deploy automation via GitHub OIDC).
 
 Phase 10A decisions (see the provenance doc for full evidence):
 - Architecture: single EC2 + Docker Compose (SQLite), NOT ECS/Fargate/ALB/RDS.
