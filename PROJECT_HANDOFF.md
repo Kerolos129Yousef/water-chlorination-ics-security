@@ -13,7 +13,8 @@ Terraform foundation), and Phase 10B (EC2 deployment PREPARATION) are complete
 and merged into main.
 
 Latest main commit:
-f5c8d5f (Merge pull request #7 from Kerolos129Yousef/phase10b-ec2-deployment)
+6dc6ba1 (Merge pull request #8 from Kerolos129Yousef/fix/frontend-trivy-ci —
+frontend CVE remediation + CI Gate 6 scans both images)
 
 Phase 10A (AWS architecture + Terraform foundation) is MERGED into main via
 PR #6. The infrastructure is DEFINED IN CODE ONLY — it has NOT been deployed:
@@ -49,13 +50,20 @@ to run): publish the public commit-SHA images (interactive `docker login`),
 bootstrap the state bucket, `terraform apply`, deploy via SSM, verify E2E —
 exact commands in `docs/provenance/phase10b_ec2_deployment.md` §9.
 
-Publish-step remediation (branch `fix/frontend-trivy-ci`, PR open, NOT merged):
-the Step-1 publish was blocked by 41 HIGH + 2 CRITICAL fixable OS CVEs in the
+Publish-step remediation (MERGED into main via PR #8, commit 6dc6ba1): the
+Step-1 publish was blocked by 41 HIGH + 2 CRITICAL fixable OS CVEs in the
 frontend's stale `nginx:1.27-alpine` base. Fixed by moving the frontend to a
 maintained `nginx:1.30.5-alpine3.24` base + `apk --no-cache upgrade` (both images
 now Trivy-clean: 0 fixable HIGH/CRITICAL), and by extending CI Gate 6 to scan
 BOTH production images (it previously scanned only the backend). No findings
-suppressed; backend image unchanged. Once merged, publish from the new main SHA.
+suppressed; backend image unchanged.
+
+IMAGE PUBLICATION IS STILL PENDING: no images have been pushed (both Docker Hub
+repos still 404) and no AWS resources exist. Re-run Phase 10B Step 1 (publish)
+from the NEW main HEAD (6dc6ba1) — build both images for linux/amd64, tag with
+the 6dc6ba1 commit SHA, Trivy-scan both (now gated in CI too), then push to the
+public repos. After publish: bootstrap state bucket, `terraform apply`
+(`-var 'dashboard_ingress_cidrs=["0.0.0.0/0"]'`), deploy via SSM, verify E2E.
 Next phase after that: Phase 10C (CI/CD deploy automation via GitHub OIDC).
 
 Phase 10A decisions (see the provenance doc for full evidence):
