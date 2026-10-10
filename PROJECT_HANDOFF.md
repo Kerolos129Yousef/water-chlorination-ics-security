@@ -17,7 +17,18 @@ Latest main commit:
 frontend CVE remediation + CI Gate 6 scans both images); followed by docs-only
 handoff/context commits.
 
-=== PHASE 10B — DEPLOYED (live in AWS, eu-central-1) ===
+=== PHASE 10B — DEPLOYED, VERIFIED, THEN TORN DOWN (owner request, 2026-10-10) ===
+The live deployment below was created, verified end-to-end, and then DESTROYED
+at the owner's explicit request to stop recurring cost. Current AWS state:
+`terraform destroy` removed all 15 application resources (0 remain: instance
+terminated, data volume + alert history permanently deleted — no snapshot). The
+S3 state bucket `ics-guardian-tfstate-<ACCOUNT_ID>` is RETAINED (prevent_destroy;
+dev state now empty), the public Docker Hub images (`:1a05dd39…`) remain, and all
+code is intact — so it is fully redeployable via `docs/provenance/phase10b_ec2_deployment.md`
+§9 (bootstrap already done; just `terraform apply` + SSM deploy; expect a NEW
+public IP). Recurring cost now ≈ $0.01/mo (state bucket only).
+
+Historical record of what was deployed/verified:
 Applied `infrastructure/terraform/environments/dev` against the S3 backend
 (bucket `ics-guardian-tfstate-<ACCOUNT_ID>`, use_lockfile=true): 15 resources
 created, 0 changed, 0 destroyed. Live resources:

@@ -569,7 +569,12 @@ The local end-to-end MVP should work first.
 > 24/7, assuming no free tier). Full evidence:
 > `docs/provenance/phase10a_aws_terraform_foundation.md`.
 >
-> **Phase 10B — DEPLOYED & VERIFIED LIVE IN AWS (2026-10-10):** single public
+> **Phase 10B — DEPLOYED & VERIFIED, THEN TORN DOWN (owner request, 2026-10-10):**
+> the deployment below was created, verified end-to-end, then destroyed to stop
+> cost (`terraform destroy`, all 15 resources removed; data volume + alerts gone,
+> no snapshot). S3 state bucket retained; Docker Hub images + code intact →
+> redeployable (expect a new public IP). Recurring cost now ≈ $0.01/mo. What was
+> deployed: single public
 > web entry point via nginx (`/api/` proxied to the backend over the private
 > Docker network; dashboard uses same-origin `/api`; port 8000 never public),
 > dedicated encrypted EBS data volume at `/data` for durable SQLite. Running on
