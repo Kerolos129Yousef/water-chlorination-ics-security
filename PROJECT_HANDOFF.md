@@ -48,6 +48,14 @@ ingress (the sole ingress rule). Remaining before go-live (all deferred, owner
 to run): publish the public commit-SHA images (interactive `docker login`),
 bootstrap the state bucket, `terraform apply`, deploy via SSM, verify E2E —
 exact commands in `docs/provenance/phase10b_ec2_deployment.md` §9.
+
+Publish-step remediation (branch `fix/frontend-trivy-ci`, PR open, NOT merged):
+the Step-1 publish was blocked by 41 HIGH + 2 CRITICAL fixable OS CVEs in the
+frontend's stale `nginx:1.27-alpine` base. Fixed by moving the frontend to a
+maintained `nginx:1.30.5-alpine3.24` base + `apk --no-cache upgrade` (both images
+now Trivy-clean: 0 fixable HIGH/CRITICAL), and by extending CI Gate 6 to scan
+BOTH production images (it previously scanned only the backend). No findings
+suppressed; backend image unchanged. Once merged, publish from the new main SHA.
 Next phase after that: Phase 10C (CI/CD deploy automation via GitHub OIDC).
 
 Phase 10A decisions (see the provenance doc for full evidence):

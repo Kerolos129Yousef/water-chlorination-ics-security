@@ -149,14 +149,19 @@ Dataset-gated tests (skip in CI): 16 tests across `tests/test_dataset.py` and
   `tests/test_postgres_alert_store.py` is an ephemeral test-container literal and
   is likewise not flagged. No real secret is committed.
 
-### Gate 6 - Container security: **Docker build + Trivy**
-- Build: `docker build -f docker/backend.Dockerfile -t ics-guardian-backend:ci .`
-  (the **real production Dockerfile**; frontend image built too). No CI-only
+### Gate 6 - Container security: **Docker build + Trivy (both images)**
+- Build: both **real production Dockerfiles** -
+  `ics-guardian-backend:ci` and `ics-guardian-frontend:ci`. No CI-only
   Dockerfile. The SWaT dataset is excluded by `.dockerignore` and never enters
   the build context or any layer.
-- Scan: `aquasecurity/trivy-action` (pinned SHA), `scanners: vuln`,
+- Scan: `aquasecurity/trivy-action` (pinned SHA) runs on **both images** as
+  separate, clearly-named steps, each with `scanners: vuln`,
   `severity: HIGH,CRITICAL`, `ignore-unfixed: true`, `exit-code: 1`,
-  `trivyignores: .trivyignore`.
+  `trivyignores: .trivyignore`. A fixable HIGH/CRITICAL in **either** image fails
+  the job and the final DevSecOps gate. (Phase 10B remediation: the frontend was
+  moved off the stale `nginx:1.27-alpine` base - Alpine 3.21.3, 41 HIGH + 2
+  CRITICAL fixable - to a maintained `nginx:1.30.5-alpine3.24` + `apk upgrade`;
+  both images now scan clean, and the frontend is gated so this cannot regress.)
 - **Fail policy:**
   - **CRITICAL (fixable): fail.** Current count: 0.
   - **HIGH (fixable): fail**, except the documented [`.trivyignore`](../../.trivyignore)
@@ -185,7 +190,7 @@ Dataset-gated tests (skip in CI): 16 tests across `tests/test_dataset.py` and
 | SAST | bandit 1.9.4 | severity>=MEDIUM AND confidence>=HIGH | pass |
 | Deps | pip-audit 2.10.1 | any advisory except 4 documented torch pins | pass |
 | Secrets | gitleaks 8.30.1 | any detection (full history) | pass |
-| Container | Trivy (action v0.36.0) | any fixable HIGH/CRITICAL except documented `.trivyignore` (4 at Phase 9; 6 as of 2026-10-10) | pass |
+| Container | Trivy (action v0.36.0), **both images** | any fixable HIGH/CRITICAL in backend OR frontend except documented `.trivyignore` (4 at Phase 9; 6 as of 2026-10-10) | pass |
 
 ---
 
