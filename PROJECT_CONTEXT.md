@@ -568,6 +568,16 @@ The local end-to-end MVP should work first.
 > date/program); costs are given as a conservative PAID estimate (~$24/mo running
 > 24/7, assuming no free tier). Full evidence:
 > `docs/provenance/phase10a_aws_terraform_foundation.md`.
+>
+> **Phase 10B** (branch `phase10b-ec2-deployment`, PREPARED, nothing deployed):
+> single public web entry point via nginx (`/api/` proxied to the backend over
+> the private Docker network; dashboard uses same-origin `/api`; port 8000 never
+> public), dedicated encrypted EBS data volume at `/data` for durable SQLite,
+> `deploy/docker-compose.aws.yml` + `deploy/deploy.sh` (SSM-driven, PUBLIC Docker
+> Hub images `kerolosyousef/ics-guardian-{backend,frontend}`, no secrets). Owner
+> approved public repos + public `0.0.0.0/0:80` demo exposure. No `terraform
+> apply`, no image push yet. Runbook + costs (~$24.8/mo):
+> `docs/provenance/phase10b_ec2_deployment.md`.
 
 ## Testing
 

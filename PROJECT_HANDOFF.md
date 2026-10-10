@@ -26,6 +26,25 @@ DevSecOps gates were green on the merged commit (a merge-time fix pinned
 urllib3 to 2.8.0 and documented two pip-vendored urllib3 HIGH CVEs as
 non-reachable Trivy exceptions — see `.trivyignore` and the provenance doc §13).
 
+Phase 10B (EC2 deployment via Docker Hub) is PREPARED on branch
+`phase10b-ec2-deployment` (not merged; NOTHING deployed, no `terraform apply`,
+no images published). It adds a single web entry point (nginx reverse-proxies
+`/api/` to the backend over the private Docker network; the dashboard now uses a
+same-origin `/api` base), a dedicated encrypted EBS **data volume** mounted at
+`/data` for durable SQLite (survives instance terminate/replace; deleted only by
+`terraform destroy`), removes the public port-8000 ingress rule (single public
+port 80), adds `deploy/docker-compose.aws.yml` + `deploy/deploy.sh` (SSM-driven,
+public Docker Hub images, no secrets), and
+`docs/provenance/phase10b_ec2_deployment.md` (full runbook + costs ≈ $24.8/mo).
+Owner decisions captured: Docker Hub repos = PUBLIC; exposure = **worldwide HTTP
+on TCP 80 only — FORMALLY APPROVED 2026-10-10** (`dashboard_ingress_cidrs =
+["0.0.0.0/0"]`, passed explicitly at apply; Terraform default stays `[]`; 8000 &
+5432 never public; plain HTTP/no-auth → synthetic data only).
+Plan (not applied): 14 add default / 15 add with the approved public port-80
+ingress (the sole ingress rule). Remaining before go-live: publish the public
+commit-SHA images (interactive `docker login`), bootstrap state bucket, apply,
+deploy via SSM, verify E2E. PR #7 open, all 6 gates green; not merged.
+
 Phase 10A decisions (see the provenance doc for full evidence):
 - Architecture: single EC2 + Docker Compose (SQLite), NOT ECS/Fargate/ALB/RDS.
 - Region: eu-central-1 (Frankfurt). Reassessed vs me-central-1 (UAE: no T-family,

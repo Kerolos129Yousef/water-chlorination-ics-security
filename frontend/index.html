@@ -9,10 +9,14 @@
   backend API (GET /status, /alerts/active, /alerts) by polling. No detection or
   alert logic lives here — the frontend just renders backend state.
 
-  Run (dashboard served separately from the API in dev):
+  API base: defaults to the SAME ORIGIN under "/api" (served by nginx, which
+  reverse-proxies to the backend). This works both for the containerized deploy
+  (one public web entry point, no exposed backend port, no CORS) and anywhere
+  the page is served by an nginx that proxies /api.
+  Override for direct/dev use:  ?api=http://host:port   &poll=2000  (ms)
+  e.g. dev with a separately-served dashboard + a local backend:
       cd frontend && python -m http.server 5500
-      # then open http://127.0.0.1:5500/  (backend on http://127.0.0.1:8000)
-  Override:  ?api=http://host:port   &poll=2000   (ms)
+      # open http://127.0.0.1:5500/?api=http://127.0.0.1:8000
 -->
 <style>
   :root {
@@ -125,7 +129,9 @@
 (function () {
   "use strict";
   const q = new URLSearchParams(location.search);
-  const API = (q.get("api") || "http://127.0.0.1:8000").replace(/\/+$/, "");
+  // Default: same-origin "/api" (nginx proxies it to the backend). The ?api=
+  // override still allows pointing straight at a backend for local/dev use.
+  const API = (q.get("api") || "/api").replace(/\/+$/, "");
   const POLL = Math.max(500, parseInt(q.get("poll") || "2000", 10));
   document.getElementById("cfgApi").textContent = API;
   document.getElementById("cfgPoll").textContent = POLL;

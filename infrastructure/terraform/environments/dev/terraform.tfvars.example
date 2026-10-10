@@ -15,9 +15,12 @@ root_volume_size_gb = 30
 # Recommended: your own public IP only. Find it with:  curl -s https://checkip.amazonaws.com
 #   dashboard_ingress_cidrs = ["YOUR.PUBLIC.IP.HERE/32"]
 #
-# Public demo (opens 80 + 8000 to the WHOLE internet — only do this knowingly):
+# Public demo — OWNER-APPROVED 2026-10-10: opens ONLY port 80 (the nginx web
+# entry point) to the whole internet. Port 8000 (API) and 5432 (Postgres) are
+# never opened by the security group. HTTP only, no auth -> synthetic data only.
 #   dashboard_ingress_cidrs = ["0.0.0.0/0"]
 #
-# Left intentionally EMPTY here so copying this file does not silently expose
-# the instance to the internet.
+# Left intentionally EMPTY here so copying this file does not silently expose the
+# instance. The approved public value is passed explicitly at apply instead:
+#   terraform apply -var='dashboard_ingress_cidrs=["0.0.0.0/0"]'
 dashboard_ingress_cidrs = []

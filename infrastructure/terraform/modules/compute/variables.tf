@@ -30,6 +30,18 @@ variable "root_volume_size_gb" {
   default     = 30
 }
 
+variable "data_volume_size_gb" {
+  description = "Dedicated encrypted gp3 DATA volume size (GiB), mounted at /data for the SQLite alert DB. 8 GiB is ample for alert history."
+  type        = number
+  default     = 8
+}
+
+variable "data_volume_device_name" {
+  description = "Block-device name requested for the data volume attachment. On nitro (t3) the kernel remaps this to /dev/nvmeXn1; user-data detects the device by role, not this name."
+  type        = string
+  default     = "/dev/sdf"
+}
+
 variable "tags" {
   description = "Common tags merged onto taggable resources."
   type        = map(string)

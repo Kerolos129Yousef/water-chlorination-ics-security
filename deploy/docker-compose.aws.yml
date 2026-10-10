@@ -1,0 +1,66 @@
+# Phase 10B - CLOUD deployment compose for the single EC2 instance.
+#
+# Differs from the repo-root docker-compose.yml (which BUILDS images and is the
+# local dev/packaging contract) in three deliberate ways:
+#   1. It PULLS pinned, commit-SHA-tagged images from Docker Hub (no build).
+#   2. The backend publishes NO host port - it is reachable only on the private
+#      Docker network; nginx (frontend) is the single public entry point on :80.
+#   3. SQLite persists to a HOST bind-mount (/data on the dedicated EBS data
+#      volume) instead of a Docker named volume, so the data lives on durable,
+#      independently-managed storage outside the instance's ephemeral lifecycle.
+#
+# Usage on the instance (see deploy/deploy.sh and the Phase 10B runbook):
+#   export ICS_IMAGE_TAG=<commit-sha>
+#   docker compose -f deploy/docker-compose.aws.yml up -d
+#
+# Images are PUBLIC on Docker Hub, so no registry credentials are needed here or
+# on the host. No secrets are present in this file.
+name: ics-guardian
+
+services:
+  backend:
+    image: kerolosyousef/ics-guardian-backend:${ICS_IMAGE_TAG:?set ICS_IMAGE_TAG to the commit-SHA image tag}
+    environment:
+      ALERT_STORAGE_BACKEND: sqlite
+      ALERT_DB_PATH: /data/alerts.sqlite3
+    volumes:
+      # Durable SQLite on the HOST data volume (dedicated encrypted EBS mounted
+      # at /data). Owned by uid/gid 10001 on the host to match the non-root
+      # `app` user in the image (see the instance user-data).
+      - /data:/data
+    # Internal only: no `ports:` mapping. nginx reaches it as http://backend:8000
+    # on the compose network; the host never exposes 8000.
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    image: kerolosyousef/ics-guardian-frontend:${ICS_IMAGE_TAG:?set ICS_IMAGE_TAG to the commit-SHA image tag}
+    ports:
+      # The ONLY public port. nginx serves the dashboard and proxies /api/ to the
+      # backend over the private network. Host firewalling is done by the EC2
+      # security group (dashboard_ingress_cidrs), not here.
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

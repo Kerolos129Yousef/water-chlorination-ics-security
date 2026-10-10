@@ -41,20 +41,22 @@ resource "aws_iam_instance_profile" "instance" {
 # * IMDSv2 required (http_tokens = required) — blocks SSRF-style metadata theft.
 # * Encrypted gp3 root volume — encryption at rest, cheaper/faster than gp2.
 # * T3 "standard" CPU-credit mode (explicit) — see credit_specification below.
-# * user_data installs Docker + the compose plugin and enables the daemon, so
-#   the node is READY for Phase 10B. It does NOT pull or run the application
-#   (no app deployment in Phase 10A, and no registry credentials on the host).
+# * user_data installs Docker + the compose plugin, then formats (first boot
+#   only) and mounts the dedicated DATA volume at /data with the right ownership
+#   for the non-root backend container. It does NOT pull or run the application
+#   (that is the SSM-driven deploy step; no registry credentials on the host).
 #
 # EBS DURABILITY (important, honest statement):
-#   The root volume uses delete_on_termination = true. Therefore:
-#     * STOP/START and REBOOT  -> the root volume (and its SQLite data) PERSIST.
-#     * TERMINATE / REPLACE    -> the root volume is DELETED with the instance;
-#                                 SQLite alert history is LOST.
-#   No EBS snapshots or automated backups are configured in Phase 10A. Before
-#   Phase 10B deploys the app, the owner must decide the SQLite persistence /
-#   backup strategy (e.g. a dedicated encrypted data volume with
-#   delete_on_termination = false, and/or a snapshot/DLM schedule). Those are
-#   recurring-cost resources and are deliberately NOT added here.
+#   ROOT volume: delete_on_termination = true -> holds the OS and Docker images
+#     only. Survives stop/start + reboot; deleted on terminate/replace.
+#   DATA volume (aws_ebs_volume.data, below): a SEPARATE encrypted gp3 volume
+#     mounted at /data that holds the SQLite alert DB. Because it is its own
+#     resource (not a block device of the instance), it SURVIVES instance
+#     stop/start, reboot, AND terminate/replace (the volume is detached, not
+#     deleted). It is destroyed only by `terraform destroy` (or if the volume
+#     resource itself is removed). It is AZ-bound: instance + volume share one AZ.
+#   NO snapshots/automated backups are configured (cost). Backup/restore is a
+#   documented MANUAL procedure (see phase10b_ec2_deployment.md).
 # ---------------------------------------------------------------------------
 resource "aws_instance" "app" {
   ami                    = var.ami_id
@@ -99,11 +101,60 @@ resource "aws_instance" "app" {
       "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)" \
       -o /usr/local/lib/docker/cli-plugins/docker-compose
     chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-    # Phase 10A ends here: the node is Docker-ready. Phase 10B deploys the app.
+
+    # --- Prepare the durable DATA volume at /data (idempotent; NEVER reformats) ---
+    DATA_MNT=/data
+    mkdir -p "$DATA_MNT"
+    # The data device is the attached disk that is neither the root disk nor
+    # already mounted. On nitro (t3) EBS shows up as /dev/nvmeXn1, so we detect
+    # it by role rather than trusting a fixed device name.
+    root_disk="$(findmnt -no SOURCE / | sed -E 's/p?[0-9]+$//')"
+    data_dev=""
+    for d in $(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}'); do
+      [ "$d" = "$root_disk" ] && continue
+      if [ -z "$(lsblk -no MOUNTPOINT "$d" | tr -d '[:space:]')" ]; then data_dev="$d"; break; fi
+    done
+    if [ -n "$data_dev" ]; then
+      # Only make a filesystem if the volume is blank -> preserves data on reattach.
+      if ! blkid "$data_dev" >/dev/null 2>&1; then mkfs.ext4 -L ics-data "$data_dev"; fi
+      uuid="$(blkid -s UUID -o value "$data_dev")"
+      grep -q "$uuid" /etc/fstab || echo "UUID=$uuid $DATA_MNT ext4 defaults,nofail 0 2" >> /etc/fstab
+      mount -a
+    fi
+    # The backend image runs as uid/gid 10001 (non-root `app`). The host dir must
+    # be writable by that uid for the bind-mounted SQLite DB.
+    chown 10001:10001 "$DATA_MNT"
+    chmod 0750 "$DATA_MNT"
+    # The node is Docker-ready with a mounted /data. App deploy is a separate,
+    # SSM-driven step (deploy/deploy.sh) - NO images pulled or run here.
   EOF
 
   # Re-run user_data only when it actually changes (not on every AMI refresh).
   user_data_replace_on_change = true
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-app" })
+}
+
+# ---------------------------------------------------------------------------
+# Dedicated DATA volume for the SQLite alert DB. Separate from the instance's
+# root device so it survives instance terminate/replace (detached, not deleted).
+# Encrypted gp3. AZ-bound to the instance's AZ.
+# ---------------------------------------------------------------------------
+resource "aws_ebs_volume" "data" {
+  availability_zone = aws_instance.app.availability_zone
+  size              = var.data_volume_size_gb
+  type              = "gp3"
+  encrypted         = true
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-data" })
+}
+
+resource "aws_volume_attachment" "data" {
+  device_name = var.data_volume_device_name
+  volume_id   = aws_ebs_volume.data.id
+  instance_id = aws_instance.app.id
+
+  # Do NOT force-detach on destroy, and leave the volume intact if only the
+  # attachment is removed -> protects the data from accidental loss.
+  stop_instance_before_detaching = true
 }

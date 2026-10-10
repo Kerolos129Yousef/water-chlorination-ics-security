@@ -17,3 +17,8 @@ output "instance_role_arn" {
   description = "ARN of the instance IAM role (SSM-only least privilege)."
   value       = aws_iam_role.instance.arn
 }
+
+output "data_volume_id" {
+  description = "ID of the dedicated encrypted EBS data volume (holds the SQLite alert DB at /data). Snapshot this for backups."
+  value       = aws_ebs_volume.data.id
+}

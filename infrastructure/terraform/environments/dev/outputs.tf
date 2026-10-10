@@ -27,3 +27,8 @@ output "ssm_session_command" {
   description = "Ready-to-run command for an SSH-less shell via Session Manager."
   value       = "aws ssm start-session --target ${module.compute.instance_id} --region ${var.region}"
 }
+
+output "data_volume_id" {
+  description = "ID of the dedicated EBS data volume (/data, SQLite). Back up with: aws ec2 create-snapshot --volume-id <id>."
+  value       = module.compute.data_volume_id
+}
