@@ -58,12 +58,20 @@ now Trivy-clean: 0 fixable HIGH/CRITICAL), and by extending CI Gate 6 to scan
 BOTH production images (it previously scanned only the backend). No findings
 suppressed; backend image unchanged.
 
-IMAGE PUBLICATION IS STILL PENDING: no images have been pushed (both Docker Hub
-repos still 404) and no AWS resources exist. Re-run Phase 10B Step 1 (publish)
-from the NEW main HEAD (6dc6ba1) — build both images for linux/amd64, tag with
-the 6dc6ba1 commit SHA, Trivy-scan both (now gated in CI too), then push to the
-public repos. After publish: bootstrap state bucket, `terraform apply`
-(`-var 'dashboard_ingress_cidrs=["0.0.0.0/0"]'`), deploy via SSM, verify E2E.
+IMAGES PUBLISHED (2026-10-10): both production images are pushed to PUBLIC
+Docker Hub repos, tagged with the main commit SHA
+`1a05dd39025d4ed5115b36c60c0154b6e59f902c` and Trivy-clean (0 fixable HIGH/CRIT):
+- kerolosyousef/ics-guardian-backend:1a05dd3…  digest sha256:e8fe7690cb738df0…
+  (debian 13.7, linux/amd64)
+- kerolosyousef/ics-guardian-frontend:1a05dd3… digest sha256:a28b0441307ac21c…
+  (alpine 3.24.2, linux/amd64)
+Deploy references the immutable SHA tag (no reliance on `latest`). Backend image
+is byte-identical to the fca8048 build (backend source unchanged; retagged).
+
+STILL PENDING (no AWS resources exist yet): bootstrap the S3 state bucket,
+`terraform apply` (`-var 'dashboard_ingress_cidrs=["0.0.0.0/0"]'`), deploy the
+stack via SSM (deploy/deploy.sh with ICS_IMAGE_TAG=1a05dd3…), verify E2E — exact
+commands in `docs/provenance/phase10b_ec2_deployment.md` §9.
 Next phase after that: Phase 10C (CI/CD deploy automation via GitHub OIDC).
 
 Phase 10A decisions (see the provenance doc for full evidence):
