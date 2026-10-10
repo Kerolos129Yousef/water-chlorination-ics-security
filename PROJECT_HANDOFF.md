@@ -9,12 +9,40 @@ main
 
 Phase 8A (Docker containerization), Phase 8B (PostgreSQL AlertStore),
 Phase 9 (CI/CD + DevSecOps security gates), Phase 10A (AWS architecture +
-Terraform foundation), and Phase 10B (EC2 deployment PREPARATION) are complete
-and merged into main.
+Terraform foundation), and Phase 10B (EC2 deployment) are complete and merged
+into main. **Phase 10B is now DEPLOYED and verified live in AWS (2026-10-10).**
 
 Latest main commit:
 6dc6ba1 (Merge pull request #8 from Kerolos129Yousef/fix/frontend-trivy-ci —
-frontend CVE remediation + CI Gate 6 scans both images)
+frontend CVE remediation + CI Gate 6 scans both images); followed by docs-only
+handoff/context commits.
+
+=== PHASE 10B — DEPLOYED (live in AWS, eu-central-1) ===
+Applied `infrastructure/terraform/environments/dev` against the S3 backend
+(bucket `ics-guardian-tfstate-<ACCOUNT_ID>`, use_lockfile=true): 15 resources
+created, 0 changed, 0 destroyed. Live resources:
+- EC2 `i-071cbd26620908296`, t3.small, eu-central-1a, AL2023, IMDSv2 required,
+  cpu_credits=standard; public IP 18.197.46.154 (changes on stop/start).
+- Encrypted gp3 root (30 GiB) + separate encrypted gp3 DATA volume
+  `vol-0af24fd2aa78f5ded` (8 GiB) mounted at /data (ext4, owner 10001:10001).
+- VPC `vpc-09f13bd40ae51b28e`, public subnet, IGW; security group inbound =
+  ONLY TCP 80 from 0.0.0.0/0 (no 8000, no 5432, no SSH); egress all.
+- IAM instance role = AmazonSSMManagedInstanceCore only; admin via SSM (Online).
+Deployed images (public Docker Hub, immutable SHA tag
+`1a05dd39025d4ed5115b36c60c0154b6e59f902c`): ics-guardian-backend (debian 13.7)
++ ics-guardian-frontend (alpine 3.24.2), via deploy/deploy.sh over SSM.
+Verified LIVE: http://18.197.46.154/ dashboard; /api/health (detector loaded,
+threshold 9.269e-05); /api/status; /api/alerts; POST /api/score (anomaly +
+alert); run_e2e_demo.py over the public /api proxy = 10/10 attack windows
+detected; SQLite alert persisted across a backend container restart (data on
+the EBS data volume); port 8000 NOT publicly reachable.
+Est. recurring cost ≈ $24.80/mo (24/7, paid). NO automatic snapshots/backups.
+Demo is HTTP, NO auth/TLS → synthetic, non-sensitive data ONLY.
+Stop to cut compute: `aws ec2 stop-instances --instance-ids i-071cbd26620908296
+--region eu-central-1` (EBS still billed ~$3.6/mo; public IP changes on start;
+containers auto-restart via restart:unless-stopped). Teardown (owner-approval
+only): `terraform destroy -var 'dashboard_ingress_cidrs=["0.0.0.0/0"]'` — this
+DELETES the data volume + alert data; the state bucket is retained.
 
 Phase 10A (AWS architecture + Terraform foundation) is MERGED into main via
 PR #6. The infrastructure is DEFINED IN CODE ONLY — it has NOT been deployed:
@@ -44,11 +72,9 @@ Owner decisions captured: Docker Hub repos = PUBLIC; exposure = **worldwide HTTP
 on TCP 80 only — FORMALLY APPROVED 2026-10-10** (`dashboard_ingress_cidrs =
 ["0.0.0.0/0"]`, passed explicitly at apply; Terraform default stays `[]`; 8000 &
 5432 never public; plain HTTP/no-auth → synthetic data only).
-Plan (not applied): 14 add default / 15 add with the approved public port-80
-ingress (the sole ingress rule). Remaining before go-live (all deferred, owner
-to run): publish the public commit-SHA images (interactive `docker login`),
-bootstrap the state bucket, `terraform apply`, deploy via SSM, verify E2E —
-exact commands in `docs/provenance/phase10b_ec2_deployment.md` §9.
+Plan was 15 add / 0 change / 0 destroy with the approved public port-80 ingress
+(the sole ingress rule); this plan has since been APPLIED (see the DEPLOYED
+block above). Exact commands: `docs/provenance/phase10b_ec2_deployment.md` §9.
 
 Publish-step remediation (MERGED into main via PR #8, commit 6dc6ba1): the
 Step-1 publish was blocked by 41 HIGH + 2 CRITICAL fixable OS CVEs in the
@@ -68,11 +94,16 @@ Docker Hub repos, tagged with the main commit SHA
 Deploy references the immutable SHA tag (no reliance on `latest`). Backend image
 is byte-identical to the fca8048 build (backend source unchanged; retagged).
 
-STILL PENDING (no AWS resources exist yet): bootstrap the S3 state bucket,
-`terraform apply` (`-var 'dashboard_ingress_cidrs=["0.0.0.0/0"]'`), deploy the
-stack via SSM (deploy/deploy.sh with ICS_IMAGE_TAG=1a05dd3…), verify E2E — exact
-commands in `docs/provenance/phase10b_ec2_deployment.md` §9.
-Next phase after that: Phase 10C (CI/CD deploy automation via GitHub OIDC).
+DEPLOYED & VERIFIED LIVE (2026-10-10): the state bucket, `terraform apply`
+(15 resources), SSM deploy, and end-to-end verification are all DONE — see the
+"PHASE 10B — DEPLOYED" block near the top of this file for live resource IDs,
+the public URL (http://18.197.46.154/), verification results, cost, and the
+stop/start/teardown commands.
+
+Current limitations of the live demo: HTTP only (no TLS/auth → synthetic data
+only); single instance (no HA); no automatic EBS snapshots/backups (manual only);
+public IP changes on stop/start (no Elastic IP / DNS).
+Next phase: Phase 10C (CI/CD deploy automation via GitHub OIDC) — NOT started.
 
 Phase 10A decisions (see the provenance doc for full evidence):
 - Architecture: single EC2 + Docker Compose (SQLite), NOT ECS/Fargate/ALB/RDS.

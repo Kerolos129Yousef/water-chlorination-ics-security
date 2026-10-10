@@ -569,14 +569,19 @@ The local end-to-end MVP should work first.
 > 24/7, assuming no free tier). Full evidence:
 > `docs/provenance/phase10a_aws_terraform_foundation.md`.
 >
-> **Phase 10B** (branch `phase10b-ec2-deployment`, PREPARED, nothing deployed):
-> single public web entry point via nginx (`/api/` proxied to the backend over
-> the private Docker network; dashboard uses same-origin `/api`; port 8000 never
-> public), dedicated encrypted EBS data volume at `/data` for durable SQLite,
-> `deploy/docker-compose.aws.yml` + `deploy/deploy.sh` (SSM-driven, PUBLIC Docker
-> Hub images `kerolosyousef/ics-guardian-{backend,frontend}`, no secrets). Owner
-> approved public repos + public `0.0.0.0/0:80` demo exposure. No `terraform
-> apply`, no image push yet. Runbook + costs (~$24.8/mo):
+> **Phase 10B — DEPLOYED & VERIFIED LIVE IN AWS (2026-10-10):** single public
+> web entry point via nginx (`/api/` proxied to the backend over the private
+> Docker network; dashboard uses same-origin `/api`; port 8000 never public),
+> dedicated encrypted EBS data volume at `/data` for durable SQLite. Running on
+> one `t3.small` in `eu-central-1` (instance `i-071cbd26620908296`, public IP
+> 18.197.46.154), PUBLIC Docker Hub images
+> `kerolosyousef/ics-guardian-{backend,frontend}:1a05dd39025d4ed5115b36c60c0154b6e59f902c`,
+> deployed via SSM (no SSH). Security group inbound = ONLY TCP 80 (`0.0.0.0/0`);
+> IAM = SSM-core only. Verified live: dashboard, `/api/health|status|alerts`,
+> `/api/score`, run_e2e_demo over the public proxy (10/10 attack windows), and
+> SQLite persistence across a backend restart. HTTP only, no auth/TLS →
+> synthetic data only. Est. ~$24.8/mo (24/7, paid); no auto-backups. Terraform
+> remote state in S3 (`use_lockfile=true`). Runbook + stop/start/teardown:
 > `docs/provenance/phase10b_ec2_deployment.md`.
 
 ## Testing
