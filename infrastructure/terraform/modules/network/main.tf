@@ -54,10 +54,12 @@ resource "aws_route_table_association" "public" {
 # ---------------------------------------------------------------------------
 # Security group.
 #
-# Inbound: only the two public-facing app ports (dashboard 80, API 8000), each
-#   restricted to `dashboard_ingress_cidrs`. That list is EMPTY by default, so
-#   by default NO inbound rule is created at all and the box is reachable only
-#   via SSM Session Manager. Ports open only when the owner supplies CIDRs.
+# Inbound: ONLY TCP 80 (the nginx single web entry point), restricted to
+#   `dashboard_ingress_cidrs`. That list is EMPTY by default, so by default NO
+#   inbound rule is created at all and the box is reachable only via SSM Session
+#   Manager. Port 80 opens only when the owner supplies CIDRs.
+#   * NO inbound 8000  -> the FastAPI backend is reached only via the nginx /api
+#                         proxy over the private Docker network; never public.
 #   * NO inbound SSH (22) -> management is via SSM Session Manager (compute module).
 #   * NO inbound 5432     -> PostgreSQL, if used, stays on the Docker network only.
 # Outbound: all (Docker Hub image pulls, OS/package updates, SSM endpoints).
