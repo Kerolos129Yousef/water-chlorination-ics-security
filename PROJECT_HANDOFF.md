@@ -8,16 +8,31 @@ Current branch:
 main
 
 Phase 8A (Docker containerization), Phase 8B (PostgreSQL AlertStore), and
-Phase 9 (CI/CD + DevSecOps security gates) are complete.
-
-Phase 9 has been merged into main (PR #5). main now contains Phase 9.
+Phase 9 (CI/CD + DevSecOps security gates) are complete and merged into main.
 
 Latest main commit:
-b46c1ca (Merge pull request #5 from Kerolos129Yousef/phase9-devsecops;
-first parent 5baeb58, second parent d7f256a)
+9d73cb3 (docs(handoff): reflect Phase 9 merged into main via PR #5)
+
+Phase 10A (AWS architecture + Terraform foundation) is IMPLEMENTED on branch
+`phase10a-terraform-foundation` (not merged into main; NOT applied to AWS).
+It adds `infrastructure/terraform/` (validated: fmt clean, validate OK, plan =
+14 add / 0 change / 0 destroy) and
+`docs/provenance/phase10a_aws_terraform_foundation.md`. No AWS resources were
+created; no Docker images were published; no ECR was introduced.
+
+Phase 10A decisions (see the provenance doc for full evidence):
+- Architecture: single EC2 + Docker Compose (SQLite), NOT ECS/Fargate/ALB/RDS.
+- Region: eu-central-1 (Frankfurt), NOT me-central-1 — UAE has no free-tier /
+  T-family instance and only arm64 Graviton small types (cost + golden-vector
+  FP risk). Region is a Terraform variable.
+- Free Tier could NOT be positively verified for the account (only "Always Free"
+  entries seen); everything is costed as PAID (~$24/mo running 24/7).
+- Remote state: S3 backend with native use_lockfile=true (no DynamoDB); the
+  state bucket is a separate, not-yet-applied bootstrap config.
 
 Next phase:
-Phase 10 — AWS + Terraform (cloud deployment + IaC). Not started.
+Phase 10B — application deployment (build/push images to Docker Hub, deploy the
+compose stack to the EC2 instance, wire CORS origin, verify end-to-end).
 
 Working tree should remain clean before starting new work.
 
@@ -297,9 +312,11 @@ docs/provenance/phase7_alert_persistence.md
 docs/provenance/phase8a_docker.md
 docs/provenance/phase8b_postgres_alertstore.md
 docs/provenance/phase9_devsecops.md
+docs/provenance/phase10a_aws_terraform_foundation.md
 
 .github/workflows/ci.yml   (the CI/CD pipeline)
 .trivyignore               (documented container-scan exceptions)
+infrastructure/terraform/  (Phase 10A IaC foundation; validated, NOT applied)
 
 The Phase 1 report is documentation only and must not be modified as part of normal engineering phases unless explicitly requested.
 
@@ -321,7 +338,8 @@ The Phase 1 report is documentation only and must not be modified as part of nor
 11. CI/CD DevSecOps gates exist (Phase 9), but the container scan blocks only on
     FIXABLE HIGH/CRITICAL — unfixed base-OS CVEs are reported, not blocking
     (remediation = hardened base image, Phase 10).
-12. No AWS/Terraform deployment yet.
+12. Phase 10A Terraform foundation exists (infrastructure/terraform/) and is
+    validated, but NOTHING is deployed to AWS yet (no apply has been run).
 13. Kubernetes is not implemented.
 14. No registry publishing — CI builds and scans images but does not push them.
 
@@ -329,11 +347,15 @@ The Phase 1 report is documentation only and must not be modified as part of nor
 
 ## NEXT PHASE
 
-Next planned phase:
+Phase 10A (AWS architecture + Terraform foundation) is DONE on branch
+`phase10a-terraform-foundation` (validated, not applied). Next planned phase:
 
-Phase 10 — AWS + Terraform (cloud deployment + IaC)
+Phase 10B — application deployment to the selected EC2 architecture
+(build/push Docker Hub images, deploy the compose stack, wire the public CORS
+origin, verify end-to-end), followed by 10C (CI/CD deploy via GitHub OIDC) and
+10D (runtime/IAM hardening).
 
-Likely to also address the Phase 9 follow-ups:
+Phase 10 will also address the Phase 9 follow-ups:
 - adopt a hardened/distroless runtime base to drive container HIGH findings toward
   zero and retire the .trivyignore vendored exceptions;
 - evaluate torch >= 2.13.0, re-run the golden vectors, and retire the 4 documented

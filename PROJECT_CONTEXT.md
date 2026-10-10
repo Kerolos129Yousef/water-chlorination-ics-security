@@ -553,6 +553,18 @@ Do not introduce AWS, Kubernetes, Terraform, or CI/CD before the local MVP is fu
 
 The local end-to-end MVP should work first.
 
+> **Status update:** this gate has been satisfied. The local MVP, Docker (8A/8B),
+> and CI/CD + DevSecOps (9) are complete, so cloud work is now authorized and
+> under way. **Phase 10A** (AWS architecture + Terraform foundation) is
+> implemented on branch `phase10a-terraform-foundation`: `infrastructure/terraform/`
+> is written and validated but **NOT applied to AWS**. Selected design: a single
+> EC2 instance running the existing Docker Compose stack (SQLite), in
+> `eu-central-1` (Frankfurt) — not ECS/Fargate/ALB/RDS, and not `me-central-1`
+> (UAE has no free-tier / T-family instance; only arm64 Graviton, a golden-vector
+> FP risk). Region/size are Terraform variables. Free-Tier eligibility could not
+> be verified, so costs are treated as paid (~$24/mo running 24/7). Full evidence:
+> `docs/provenance/phase10a_aws_terraform_foundation.md`.
+
 ## Testing
 
 Every major implementation phase must include appropriate tests.

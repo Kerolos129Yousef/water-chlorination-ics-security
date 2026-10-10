@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is git-ignored
+# (only *.tfvars.example templates are committed).
+
+project             = "ics-guardian"
+environment         = "dev"
+region              = "eu-central-1"
+instance_type       = "t3.small"
+root_volume_size_gb = 30
+
+# Lock the dashboard + API down to your own IP for a private demo, e.g.:
+# dashboard_ingress_cidrs = ["203.0.113.4/32"]
+dashboard_ingress_cidrs = ["0.0.0.0/0"]
