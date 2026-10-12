@@ -1,313 +1,675 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Water Chlorination ICS — TranAD Monitor</title>
+<meta name="color-scheme" content="dark light" />
+<title>ICS Guardian — Water Chlorination Monitor</title>
 <!--
-  Phase 5A operator dashboard. Zero-build, single file: it talks ONLY to the
-  backend API (GET /status, /alerts/active, /alerts) by polling. No detection or
-  alert logic lives here — the frontend just renders backend state.
+  ICS Guardian — operator console for the TranAD water-chlorination anomaly
+  detector. Zero-build, single self-contained file (no external fonts/JS/CSS):
+  nginx serves it and reverse-proxies the API under the SAME ORIGIN at /api.
 
-  API base: defaults to the SAME ORIGIN under "/api" (served by nginx, which
-  reverse-proxies to the backend). This works both for the containerized deploy
-  (one public web entry point, no exposed backend port, no CORS) and anywhere
-  the page is served by an nginx that proxies /api.
-  Override for direct/dev use:  ?api=http://host:port   &poll=2000  (ms)
-  e.g. dev with a separately-served dashboard + a local backend:
-      cd frontend && python -m http.server 5500
-      # open http://127.0.0.1:5500/?api=http://127.0.0.1:8000
+  It is a pure VIEW: it only polls the backend (GET /status, /alerts/active,
+  /alerts) and renders state. No detection/alert logic lives here.
+
+  API base: defaults to same-origin "/api". Override for direct/dev use with
+  ?api=http://host:port  (and ?poll=<ms> to change the refresh interval), e.g.
+      python -m http.server 5500      # then open
+      http://127.0.0.1:5500/?api=http://127.0.0.1:8000
 -->
 <style>
-  :root {
-    --bg:#0f1720; --panel:#182430; --edge:#26333f; --txt:#e6edf3; --muted:#8b9aa7;
-    --ok:#2ea043; --warn:#d29922; --bad:#f85149; --accent:#388bfd;
+  :root{
+    --r:14px; --r-sm:10px; --r-xs:7px;
+    --sp:4px;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Inter,"Helvetica Neue",Arial,sans-serif;
+    --maxw:1360px;
+    --t-fast:.15s ease; --t:.25s ease;
   }
-  * { box-sizing:border-box; }
-  body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
-  header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--edge); background:var(--panel); }
-  header h1 { font-size:16px; margin:0; font-weight:600; }
-  header .spacer { flex:1; }
-  .pill { padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--edge); }
-  .pill.ok { color:var(--ok); border-color:var(--ok); }
-  .pill.bad { color:var(--bad); border-color:var(--bad); }
-  .pill.warn { color:var(--warn); border-color:var(--warn); }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; padding:18px 20px; }
-  .card { background:var(--panel); border:1px solid var(--edge); border-radius:10px; padding:16px; }
-  .card h2 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
-  .row { display:flex; justify-content:space-between; gap:12px; padding:4px 0; }
-  .row .k { color:var(--muted); }
-  .row .v { font-variant-numeric:tabular-nums; text-align:right; }
-  .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; }
-  .badge { display:inline-block; padding:2px 10px; border-radius:6px; font-weight:700; font-size:12px; }
-  .badge.normal { background:rgba(46,160,67,.15); color:var(--ok); }
-  .badge.anomaly { background:rgba(248,81,73,.15); color:var(--bad); }
-  .badge.telemetry { background:rgba(210,153,34,.15); color:var(--warn); }
-  .sev-LOW { color:var(--ok); } .sev-MEDIUM { color:var(--warn); } .sev-HIGH { color:var(--bad); }
-  .chip { display:inline-block; padding:1px 8px; margin:2px 4px 2px 0; border-radius:6px;
-          background:rgba(210,153,34,.15); color:var(--warn); font-weight:600; font-size:12px; }
-  .muted { color:var(--muted); }
-  .empty { color:var(--muted); font-style:italic; padding:8px 0; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--edge); font-variant-numeric:tabular-nums; }
-  th { color:var(--muted); font-weight:600; }
-  .feat { display:flex; justify-content:space-between; gap:8px; padding:3px 0; border-bottom:1px dashed var(--edge); }
-  .banner { display:none; margin:0 20px; padding:10px 14px; border-radius:8px; background:rgba(248,81,73,.12);
-            border:1px solid var(--bad); color:var(--bad); }
-  .banner.show { display:block; }
-  .spark { display:flex; align-items:flex-end; gap:2px; height:48px; margin-top:8px; }
-  .spark span { flex:1; background:var(--accent); min-height:2px; border-radius:1px 1px 0 0; opacity:.85; }
-  .spark span.hot { background:var(--bad); }
-  footer { color:var(--muted); font-size:12px; padding:8px 20px 24px; }
-  code { background:#0b0f14; padding:1px 5px; border-radius:4px; }
+  html[data-theme="dark"]{
+    --bg:#0a0e14; --bg-grad1:#0d1420; --bg-grad2:#0a0e14;
+    --panel:#101722; --panel-2:#0c131d; --panel-hi:#17212f;
+    --edge:#223042; --edge-soft:#1a2432;
+    --txt:#e8eef5; --txt-2:#9fb0c0; --txt-3:#64748b;
+    --accent:#3b82f6; --accent-2:#38bdf8; --accent-soft:rgba(59,130,246,.14);
+    --ok:#22c55e; --ok-soft:rgba(34,197,94,.14);
+    --warn:#f59e0b; --warn-soft:rgba(245,158,11,.14);
+    --bad:#ef4444; --bad-soft:rgba(239,68,68,.14);
+    --crit:#fb7185; --crit-soft:rgba(244,63,94,.16);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35);
+    --grid-line:rgba(255,255,255,.05);
+  }
+  html[data-theme="light"]{
+    --bg:#f4f6fb; --bg-grad1:#eef2fa; --bg-grad2:#f4f6fb;
+    --panel:#ffffff; --panel-2:#f7f9fd; --panel-hi:#eef3fb;
+    --edge:#d8e0ec; --edge-soft:#e6ebf3;
+    --txt:#0f1b2d; --txt-2:#51627a; --txt-3:#8595aa;
+    --accent:#2563eb; --accent-2:#0ea5e9; --accent-soft:rgba(37,99,235,.10);
+    --ok:#16a34a; --ok-soft:rgba(22,163,74,.12);
+    --warn:#b45309; --warn-soft:rgba(180,83,9,.12);
+    --bad:#dc2626; --bad-soft:rgba(220,38,38,.10);
+    --crit:#e11d48; --crit-soft:rgba(225,29,72,.12);
+    --shadow:0 1px 2px rgba(16,27,45,.06),0 10px 30px rgba(16,27,45,.08);
+    --grid-line:rgba(15,27,45,.06);
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; color:var(--txt); font-family:var(--sans); font-size:14px; line-height:1.5;
+    background:
+      radial-gradient(1200px 600px at 100% -10%, var(--bg-grad1), transparent 60%),
+      radial-gradient(900px 500px at -10% 0%, var(--bg-grad1), transparent 55%),
+      var(--bg-grad2);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  a{color:var(--accent-2)}
+  .num{font-variant-numeric:tabular-nums}
+  .mono{font-family:var(--mono)}
+  .muted{color:var(--txt-2)} .faint{color:var(--txt-3)}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:6px}
+
+  /* ---------- top bar ---------- */
+  .appbar{
+    position:sticky; top:0; z-index:30;
+    display:flex; align-items:center; gap:16px; padding:12px 22px;
+    background:color-mix(in srgb, var(--panel) 88%, transparent);
+    backdrop-filter:saturate(1.2) blur(10px);
+    border-bottom:1px solid var(--edge);
+  }
+  .appbar::before{content:""; position:absolute; left:0; right:0; top:0; height:2px;
+    background:linear-gradient(90deg,var(--accent),var(--accent-2),transparent)}
+  .brand{display:flex; align-items:center; gap:11px; min-width:0}
+  .brand .logo{
+    width:34px; height:34px; border-radius:9px; flex:0 0 auto;
+    display:grid; place-items:center; color:#fff;
+    background:linear-gradient(145deg,var(--accent),var(--accent-2));
+    box-shadow:0 4px 12px var(--accent-soft);
+  }
+  .brand .logo svg{width:20px; height:20px}
+  .brand .name{font-weight:700; font-size:15px; letter-spacing:.2px; line-height:1.15}
+  .brand .sub{font-size:11.5px; color:var(--txt-3); letter-spacing:.3px}
+  .appbar .spacer{flex:1}
+  .toolbar{display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end}
+
+  .status-pill{
+    display:inline-flex; align-items:center; gap:8px; padding:6px 12px; border-radius:999px;
+    font-size:12.5px; font-weight:600; border:1px solid var(--edge); background:var(--panel-2);
+  }
+  .status-pill .dot{width:8px; height:8px; border-radius:50%; background:var(--txt-3); flex:0 0 auto}
+  .status-pill.ok{color:var(--ok); border-color:color-mix(in srgb,var(--ok) 45%,var(--edge))}
+  .status-pill.ok .dot{background:var(--ok); box-shadow:0 0 0 0 var(--ok); animation:pulse 2s infinite}
+  .status-pill.bad{color:var(--bad); border-color:color-mix(in srgb,var(--bad) 55%,var(--edge))}
+  .status-pill.bad .dot{background:var(--bad)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 55%,transparent)}
+    70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+
+  .btn{
+    display:inline-flex; align-items:center; gap:7px; cursor:pointer;
+    padding:7px 12px; border-radius:var(--r-xs); font-size:12.5px; font-weight:600;
+    color:var(--txt-2); background:var(--panel-2); border:1px solid var(--edge);
+    transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast);
+  }
+  .btn:hover{color:var(--txt); border-color:color-mix(in srgb,var(--accent) 40%,var(--edge)); background:var(--panel-hi)}
+  .btn svg{width:15px; height:15px}
+  .btn.active{color:var(--accent-2); border-color:color-mix(in srgb,var(--accent) 55%,var(--edge))}
+  .clock{font-variant-numeric:tabular-nums; color:var(--txt-2); font-size:12.5px; white-space:nowrap}
+
+  /* ---------- layout ---------- */
+  main{max-width:var(--maxw); margin:0 auto; padding:20px 22px 48px}
+  .banner{
+    display:none; align-items:center; gap:10px; margin-bottom:16px; padding:11px 14px;
+    border-radius:var(--r-sm); background:var(--bad-soft); border:1px solid color-mix(in srgb,var(--bad) 45%,var(--edge));
+    color:var(--bad); font-weight:600; font-size:13px;
+  }
+  .banner.show{display:flex}
+  .banner svg{width:17px;height:17px;flex:0 0 auto}
+
+  .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:12px; margin-bottom:16px}
+  .kpi{
+    background:linear-gradient(180deg,var(--panel),var(--panel-2)); border:1px solid var(--edge);
+    border-radius:var(--r-sm); padding:13px 15px; box-shadow:var(--shadow); position:relative; overflow:hidden;
+  }
+  .kpi .lab{display:flex; align-items:center; gap:7px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--txt-3); font-weight:600}
+  .kpi .lab svg{width:14px;height:14px;opacity:.8}
+  .kpi .val{margin-top:7px; font-size:23px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.1}
+  .kpi .meta{margin-top:3px; font-size:11.5px; color:var(--txt-3)}
+  .kpi.accent{border-color:color-mix(in srgb,var(--accent) 35%,var(--edge))}
+  .kpi.good .val{color:var(--ok)} .kpi.warn .val{color:var(--warn)} .kpi.bad .val{color:var(--bad)}
+
+  .grid{display:grid; grid-template-columns:repeat(12,1fr); gap:16px}
+  .card{
+    background:var(--panel); border:1px solid var(--edge); border-radius:var(--r);
+    box-shadow:var(--shadow); padding:0; overflow:hidden; display:flex; flex-direction:column;
+  }
+  .card > header{
+    display:flex; align-items:center; gap:10px; padding:14px 16px 12px;
+    border-bottom:1px solid var(--edge-soft);
+  }
+  .card > header h2{margin:0; font-size:12px; letter-spacing:.07em; text-transform:uppercase; color:var(--txt-2); font-weight:700}
+  .card > header .ico{width:16px;height:16px;color:var(--accent-2);flex:0 0 auto}
+  .card > header .right{margin-left:auto; display:flex; align-items:center; gap:8px}
+  .card .body{padding:16px; flex:1}
+  .col-4{grid-column:span 4} .col-5{grid-column:span 5} .col-6{grid-column:span 6}
+  .col-7{grid-column:span 7} .col-8{grid-column:span 8} .col-12{grid-column:span 12}
+  @media (max-width:1040px){ .grid>[class*="col-"]{grid-column:span 12} .col-6.half{grid-column:span 12} }
+
+  /* rows / data */
+  .dl{display:flex; flex-direction:column; gap:2px}
+  .row{display:flex; justify-content:space-between; align-items:baseline; gap:14px; padding:7px 0; border-bottom:1px dashed var(--edge-soft)}
+  .row:last-child{border-bottom:0}
+  .row .k{color:var(--txt-2); font-size:13px}
+  .row .v{text-align:right; font-variant-numeric:tabular-nums; font-weight:600}
+
+  .badge{display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:999px; font-weight:700; font-size:11.5px; letter-spacing:.02em; border:1px solid transparent}
+  .badge .d{width:7px;height:7px;border-radius:50%}
+  .b-ok{background:var(--ok-soft); color:var(--ok); border-color:color-mix(in srgb,var(--ok) 35%,transparent)}
+  .b-ok .d{background:var(--ok)}
+  .b-bad{background:var(--bad-soft); color:var(--bad); border-color:color-mix(in srgb,var(--bad) 35%,transparent)}
+  .b-bad .d{background:var(--bad)}
+  .b-warn{background:var(--warn-soft); color:var(--warn); border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
+  .b-warn .d{background:var(--warn)}
+  .b-muted{background:var(--panel-hi); color:var(--txt-2); border-color:var(--edge)}
+  .b-muted .d{background:var(--txt-3)}
+  .sev{font-weight:800; letter-spacing:.03em}
+  .sev-LOW{color:var(--ok)} .sev-MEDIUM{color:var(--warn)} .sev-HIGH{color:var(--bad)} .sev-CRITICAL{color:var(--crit)}
+  .chip{display:inline-flex; align-items:center; padding:2px 9px; margin:2px 5px 2px 0; border-radius:6px;
+    background:var(--warn-soft); color:var(--warn); font-weight:600; font-size:12px; border:1px solid color-mix(in srgb,var(--warn) 25%,transparent)}
+
+  /* detection hero */
+  .hero{display:grid; grid-template-columns:auto 1fr; gap:18px; align-items:center}
+  @media (max-width:560px){ .hero{grid-template-columns:1fr} }
+  .scorebox{min-width:150px}
+  .scorebox .score{font-size:40px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; font-family:var(--mono)}
+  .scorebox .score.hot{color:var(--bad)} .scorebox .score.cool{color:var(--ok)}
+  .scorebox .ratio{margin-top:6px; font-size:12px; color:var(--txt-3)}
+  .chartwrap{min-width:0}
+  .chartwrap svg{width:100%; height:120px; display:block}
+  .chart-legend{display:flex; gap:16px; margin-top:4px; font-size:11.5px; color:var(--txt-3)}
+  .chart-legend i{display:inline-block; width:14px; height:3px; border-radius:2px; vertical-align:middle; margin-right:5px}
+
+  /* feature bars */
+  .feat{display:grid; grid-template-columns:1fr auto; gap:8px 10px; align-items:center; padding:5px 0}
+  .feat .fname{font-family:var(--mono); font-size:12.5px}
+  .feat .fval{font-variant-numeric:tabular-nums; font-size:12.5px; color:var(--txt-2)}
+  .feat .bar{grid-column:1 / -1; height:6px; border-radius:4px; background:var(--panel-hi); overflow:hidden}
+  .feat .bar > i{display:block; height:100%; border-radius:4px; background:linear-gradient(90deg,var(--accent),var(--accent-2))}
+
+  /* tables */
+  .tablewrap{overflow:auto; margin:-16px; padding:0}
+  table{width:100%; border-collapse:collapse; font-size:13px}
+  thead th{
+    position:sticky; top:0; text-align:left; padding:10px 14px; background:var(--panel-2);
+    color:var(--txt-3); font-weight:700; font-size:11px; letter-spacing:.05em; text-transform:uppercase;
+    border-bottom:1px solid var(--edge); white-space:nowrap;
+  }
+  tbody td{padding:9px 14px; border-bottom:1px solid var(--edge-soft); font-variant-numeric:tabular-nums; white-space:nowrap}
+  tbody tr{transition:background var(--t-fast)}
+  tbody tr:hover{background:var(--panel-2)}
+  tbody tr:last-child td{border-bottom:0}
+  .select{appearance:none; background:var(--panel-2); color:var(--txt-2); border:1px solid var(--edge);
+    border-radius:var(--r-xs); padding:5px 26px 5px 10px; font-size:12px; font-weight:600; cursor:pointer;
+    background-image:linear-gradient(45deg,transparent 50%,var(--txt-3) 50%),linear-gradient(135deg,var(--txt-3) 50%,transparent 50%);
+    background-position:calc(100% - 15px) 11px,calc(100% - 10px) 11px; background-size:5px 5px,5px 5px; background-repeat:no-repeat}
+
+  .empty{display:flex; align-items:center; gap:9px; color:var(--txt-3); font-size:13px; padding:14px 2px}
+  .empty svg{width:16px;height:16px;opacity:.7}
+
+  /* skeleton */
+  .sk{background:linear-gradient(90deg,var(--panel-hi) 25%,var(--edge-soft) 37%,var(--panel-hi) 63%);
+    background-size:400% 100%; animation:shimmer 1.4s infinite; border-radius:6px; color:transparent!important}
+  @keyframes shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+
+  details.caveat{margin-top:10px; font-size:12px}
+  details.caveat summary{cursor:pointer; color:var(--txt-3); font-weight:600; list-style:none; display:inline-flex; align-items:center; gap:6px}
+  details.caveat summary svg{width:13px;height:13px}
+  details.caveat p{margin:8px 0 0; color:var(--txt-2); line-height:1.55; border-left:2px solid var(--edge); padding-left:10px}
+
+  footer{max-width:var(--maxw); margin:0 auto; padding:18px 22px 40px; color:var(--txt-3); font-size:12px; line-height:1.7}
+  footer .disc{display:flex; gap:8px; align-items:flex-start}
+  footer code{background:var(--panel-2); border:1px solid var(--edge-soft); padding:1px 6px; border-radius:5px; font-size:11.5px}
+
+  @media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important} }
 </style>
 </head>
 <body>
-<header>
-  <h1>💧 Water Chlorination ICS — TranAD Monitor</h1>
+<header class="appbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2.5l6.5 3v5c0 4.3-2.9 7.6-6.5 9-3.6-1.4-6.5-4.7-6.5-9v-5L12 2.5z"/>
+        <path d="M12 8.5c-1.6 1.8-2.4 3-2.4 4.1a2.4 2.4 0 004.8 0c0-1.1-.8-2.3-2.4-4.1z" fill="currentColor" stroke="none"/>
+      </svg>
+    </span>
+    <div>
+      <div class="name">ICS Guardian</div>
+      <div class="sub">Water Chlorination · TranAD Anomaly Monitor</div>
+    </div>
+  </div>
   <span class="spacer"></span>
-  <span class="muted" id="lastUpdate">—</span>
-  <span class="pill" id="conn">connecting…</span>
+  <div class="toolbar">
+    <span class="clock" id="clock" aria-hidden="true">—</span>
+    <button class="btn" id="btnPause" type="button" title="Pause / resume live polling" aria-pressed="false">
+      <svg id="pauseIco" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+      <span id="pauseTxt">Live</span>
+    </button>
+    <button class="btn" id="btnRefresh" type="button" title="Refresh now">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-2.6-6.4"/><path d="M21 4v5h-5"/></svg>
+      Refresh
+    </button>
+    <button class="btn" id="btnTheme" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
+      <svg id="themeIco" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+    </button>
+    <span class="status-pill" id="conn" role="status" aria-live="polite"><span class="dot"></span><span id="connTxt">connecting…</span></span>
+  </div>
 </header>
 
-<div class="banner" id="banner"></div>
-
-<div class="grid">
-  <!-- 1. System status -->
-  <div class="card">
-    <h2>System status</h2>
-    <div class="row"><span class="k">Backend</span><span class="v" id="sysBackend">—</span></div>
-    <div class="row"><span class="k">Detector</span><span class="v" id="sysDetector">—</span></div>
-    <div class="row"><span class="k">Model</span><span class="v" id="sysModel">—</span></div>
-    <div class="row"><span class="k">Threshold</span><span class="v" id="sysThreshold">—</span></div>
-    <div class="row"><span class="k">Telemetry faults</span><span class="v" id="sysTelemetry">—</span></div>
-    <div class="row"><span class="k">Alert state</span><span class="v muted" id="sysPersist">—</span></div>
+<main>
+  <div class="banner" id="banner" role="alert">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+    <span id="bannerTxt"></span>
   </div>
 
-  <!-- 2. Detection status -->
-  <div class="card">
-    <h2>Detection status (latest window)</h2>
-    <div class="big" id="detScore">—</div>
-    <div class="row"><span class="k">Decision</span><span class="v"><span class="badge normal" id="detBadge">—</span></span></div>
-    <div class="row"><span class="k">Threshold</span><span class="v" id="detThreshold">—</span></div>
-    <div class="row"><span class="k">Window end</span><span class="v" id="detWindowEnd">—</span></div>
-    <div class="spark" id="spark" title="recent anomaly scores"></div>
-  </div>
+  <!-- KPI strip -->
+  <section class="kpis" id="kpis" aria-label="Key metrics">
+    <div class="kpi" id="kpiDetector"><div class="lab">Detector</div><div class="val sk">placeholder</div><div class="meta">&nbsp;</div></div>
+    <div class="kpi" id="kpiDecision"><div class="lab">Latest decision</div><div class="val sk">placeholder</div><div class="meta">&nbsp;</div></div>
+    <div class="kpi" id="kpiActive"><div class="lab">Active anomalies</div><div class="val sk">placeholder</div><div class="meta">&nbsp;</div></div>
+    <div class="kpi" id="kpiTelemetry"><div class="lab">Telemetry faults</div><div class="val sk">placeholder</div><div class="meta">&nbsp;</div></div>
+    <div class="kpi" id="kpiTotal"><div class="lab">Total alerts</div><div class="val sk">placeholder</div><div class="meta">&nbsp;</div></div>
+    <div class="kpi" id="kpiPersist"><div class="lab">Alert store</div><div class="val sk">placeholder</div><div class="meta">&nbsp;</div></div>
+  </section>
 
-  <!-- 3. Active alert (PROCESS_ANOMALY) -->
-  <div class="card">
-    <h2>Active process anomaly</h2>
-    <div id="activeAlert"><div class="empty">No active alerts.</div></div>
-  </div>
+  <div class="grid">
+    <!-- Detection hero -->
+    <div class="card col-8">
+      <header>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg>
+        <h2>Detection — latest window</h2>
+        <div class="right"><span id="detBadge" class="badge b-muted"><span class="d"></span>no data</span></div>
+      </header>
+      <div class="body">
+        <div class="hero">
+          <div class="scorebox">
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em">Anomaly score</div>
+            <div class="score cool" id="detScore">—</div>
+            <div class="ratio" id="detRatio">—</div>
+            <div class="ratio" id="detWindowEnd">window —</div>
+          </div>
+          <div class="chartwrap">
+            <svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="Recent anomaly scores"></svg>
+            <div class="chart-legend">
+              <span><i style="background:var(--accent-2)"></i>anomaly score</span>
+              <span><i style="background:var(--bad)"></i>threshold</span>
+              <span class="faint" id="chartRange"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
-  <!-- 4. Telemetry faults (TELEMETRY_FAULT) -->
-  <div class="card">
-    <h2>Telemetry / sensor faults</h2>
-    <div id="telemetryFaults"><div class="empty">All monitored channels healthy.</div></div>
-  </div>
+    <!-- System status -->
+    <div class="card col-4">
+      <header>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M9 16v4M15 16v4"/></svg>
+        <h2>System</h2>
+        <div class="right"><span id="sysOverall" class="badge b-muted"><span class="d"></span>—</span></div>
+      </header>
+      <div class="body dl">
+        <div class="row"><span class="k">Detector</span><span class="v" id="sysDetector">—</span></div>
+        <div class="row"><span class="k">Model</span><span class="v mono" id="sysModel">—</span></div>
+        <div class="row"><span class="k">Window / features</span><span class="v" id="sysShape">—</span></div>
+        <div class="row"><span class="k">Threshold</span><span class="v mono" id="sysThreshold">—</span></div>
+        <div class="row"><span class="k">Alert store</span><span class="v" id="sysPersist">—</span></div>
+        <details class="caveat" id="caveatWrap" hidden>
+          <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Model threshold caveat</summary>
+          <p id="caveatTxt"></p>
+        </details>
+      </div>
+    </div>
 
-  <!-- 5. Process-anomaly history -->
-  <div class="card" style="grid-column:1 / -1;">
-    <h2>Process-anomaly history</h2>
-    <div id="alertHistory"><div class="empty">No alerts yet.</div></div>
-  </div>
+    <!-- Active process anomaly -->
+    <div class="card col-6 half">
+      <header>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l6.5 3v5c0 4.3-2.9 7.6-6.5 9-3.6-1.4-6.5-4.7-6.5-9v-5L12 2.5z"/><path d="M9 12l2 2 4-4"/></svg>
+        <h2>Active process anomaly</h2>
+      </header>
+      <div class="body" id="activeAlert"></div>
+    </div>
 
-  <!-- 6. Telemetry-fault history -->
-  <div class="card" style="grid-column:1 / -1;">
-    <h2>Telemetry-fault history</h2>
-    <div id="telemetryHistory"><div class="empty">No telemetry faults yet.</div></div>
+    <!-- Telemetry faults -->
+    <div class="card col-6 half">
+      <header>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h4"/></svg>
+        <h2>Telemetry / sensor faults</h2>
+      </header>
+      <div class="body" id="telemetryFaults"></div>
+    </div>
+
+    <!-- Process-anomaly history -->
+    <div class="card col-12">
+      <header>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M3 12h18M3 19h18"/></svg>
+        <h2>Process-anomaly history</h2>
+        <div class="right">
+          <label class="faint" for="filtProc" style="font-size:11px">status</label>
+          <select class="select" id="filtProc"><option value="all">all</option><option value="OPEN">open</option><option value="CLOSED">closed</option></select>
+        </div>
+      </header>
+      <div class="body"><div id="alertHistory"></div></div>
+    </div>
+
+    <!-- Telemetry-fault history -->
+    <div class="card col-12">
+      <header>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M3 12h18M3 19h18"/></svg>
+        <h2>Telemetry-fault history</h2>
+        <div class="right">
+          <label class="faint" for="filtTel" style="font-size:11px">status</label>
+          <select class="select" id="filtTel"><option value="all">all</option><option value="OPEN">open</option><option value="CLOSED">closed</option></select>
+        </div>
+      </header>
+      <div class="body"><div id="telemetryHistory"></div></div>
+    </div>
   </div>
-</div>
+</main>
 
 <footer>
-  Polling <code id="cfgApi"></code> every <span id="cfgPoll"></span> ms.
-  Alert-state durability is shown above (SQLite-backed alerts survive a backend restart; the in-memory default does not).
-  Severity is an engineering heuristic (score ÷ threshold), not an ML prediction.
+  <div class="disc">
+    <span>ℹ️</span>
+    <span>
+      <strong>Severity</strong> is an engineering heuristic (score ÷ threshold), not an ML prediction.
+      <strong>PROCESS_ANOMALY</strong> comes from TranAD; <strong>TELEMETRY_FAULT</strong> is a stuck-sensor signal (a frozen channel, not an attack).
+      Alert durability is shown above — durable stores (SQLite/PostgreSQL) survive a backend restart; in-memory resets.
+      API: <code id="cfgApi">—</code> · refresh <code id="cfgPoll">—</code>.
+    </span>
+  </div>
 </footer>
 
 <script>
 (function () {
   "use strict";
   const q = new URLSearchParams(location.search);
-  // Default: same-origin "/api" (nginx proxies it to the backend). The ?api=
-  // override still allows pointing straight at a backend for local/dev use.
   const API = (q.get("api") || "/api").replace(/\/+$/, "");
-  const POLL = Math.max(500, parseInt(q.get("poll") || "2000", 10));
-  document.getElementById("cfgApi").textContent = API;
-  document.getElementById("cfgPoll").textContent = POLL;
+  const POLL = Math.max(500, parseInt(q.get("poll") || "2500", 10));
+  const MAX_POINTS = 60;
 
   const $ = (id) => document.getElementById(id);
-  const scores = [];                 // client-side trend of recent scores
-  const MAX_SPARK = 40;
+  const scores = [];            // {t:Date, v:Number, hot:Boolean}
+  const state = { proc: [], tel: [], threshold: null };
+  let paused = false, inFlight = false, timer = null;
 
-  const fmt = (x, d = 6) => (x === null || x === undefined ? "—" : Number(x).toPrecision(d));
-  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
-    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+  // ---- helpers ----
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  const fmt = (x, d = 6) => (x === null || x === undefined || Number.isNaN(Number(x)) ? "—" : Number(x).toPrecision(d));
+  const int = (x) => (x === null || x === undefined ? "—" : Number(x).toLocaleString());
 
+  function timeAgo(iso) {
+    if (!iso) return "—";
+    const t = Date.parse(iso); if (Number.isNaN(t)) return esc(iso);
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 0) return "just now";
+    if (s < 60) return s + "s ago";
+    const m = Math.floor(s / 60); if (m < 60) return m + "m " + (s % 60) + "s ago";
+    const h = Math.floor(m / 60); if (h < 24) return h + "h " + (m % 60) + "m ago";
+    return Math.floor(h / 24) + "d ago";
+  }
+  const abs = (iso) => { if (!iso) return ""; const t = Date.parse(iso); return Number.isNaN(t) ? esc(iso) : new Date(t).toLocaleString(); };
+  const timeCell = (iso) => iso ? `<span title="${abs(iso)}">${esc(timeAgo(iso))}</span>` : "—";
+  const dur = (sec) => {
+    if (sec == null) return "—"; sec = Math.round(Number(sec));
+    if (sec < 60) return sec + "s"; const m = Math.floor(sec / 60);
+    if (m < 60) return m + "m " + (sec % 60) + "s"; const h = Math.floor(m / 60); return h + "h " + (m % 60) + "m";
+  };
+  const sevClass = (s) => "sev sev-" + esc(String(s || "").toUpperCase());
+
+  // ---- connection + chrome ----
   function setConn(ok) {
     const el = $("conn");
-    el.textContent = ok ? "connected" : "backend unavailable";
-    el.className = "pill " + (ok ? "ok" : "bad");
-    $("banner").className = "banner" + (ok ? "" : " show");
-    if (!ok) $("banner").textContent = "⚠ Cannot reach the backend API at " + API + ". Retrying…";
+    el.className = "status-pill " + (ok ? "ok" : "bad");
+    $("connTxt").textContent = ok ? (paused ? "paused" : "live") : "disconnected";
+    const b = $("banner");
+    if (ok) b.classList.remove("show");
+    else { b.classList.add("show"); $("bannerTxt").textContent = "Cannot reach the backend API at " + API + " — retrying. Showing last known state."; }
   }
+  function tickClock(){ $("clock").textContent = new Date().toLocaleTimeString(); }
 
   async function getJSON(path) {
-    const r = await fetch(API + path, { headers: { "accept": "application/json" } });
+    const r = await fetch(API + path, { headers: { accept: "application/json" } });
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
   }
 
-  function renderStatus(s) {
+  // ---- KPIs ----
+  function kpi(id, val, meta, cls) {
+    const el = $(id);
+    el.querySelector(".val").className = "val" + (cls ? " " + cls : "");
+    el.querySelector(".val").textContent = val;
+    el.querySelector(".meta").innerHTML = meta || "&nbsp;";
+    el.className = "kpi" + (cls === "accent" ? " accent" : "");
+  }
+  function renderKpis(s) {
     const detOk = !!s.detector_loaded;
-    $("sysBackend").innerHTML = badge(s.status === "ok", s.status || "—");
-    $("sysDetector").innerHTML = badge(detOk, detOk ? "loaded" : "unavailable");
-    $("sysModel").textContent = s.model_type || "—";
-    $("sysThreshold").textContent = fmt(s.threshold);
+    $("kpiDetector").className = "kpi " + (detOk ? "good" : "bad");
+    $("kpiDetector").querySelector(".val").className = "val"; $("kpiDetector").querySelector(".val").textContent = detOk ? "Online" : "Down";
+    $("kpiDetector").querySelector(".meta").textContent = (s.model_type || "—") + (s.status ? " · " + s.status : "");
+
+    const anom = s.last_is_anomaly;
+    const kd = $("kpiDecision"); kd.className = "kpi " + (anom === true ? "bad" : anom === false ? "good" : "");
+    kd.querySelector(".val").className = "val"; kd.querySelector(".val").textContent = anom == null ? "—" : (anom ? "ANOMALY" : "NORMAL");
+    kd.querySelector(".meta").textContent = s.last_anomaly_score == null ? "no window scored yet" : "score " + fmt(s.last_anomaly_score, 4);
+
+    const ac = s.active_alert_count || 0;
+    $("kpiActive").className = "kpi " + (ac > 0 ? "bad" : "good");
+    $("kpiActive").querySelector(".val").className = "val"; $("kpiActive").querySelector(".val").textContent = int(ac);
+    $("kpiActive").querySelector(".meta").textContent = ac > 0 ? "incident open" : "none open";
+
     const tf = s.active_telemetry_fault_count || 0;
-    const chans = (s.telemetry_fault_channels || []).join(", ");
-    const tEl = $("sysTelemetry");
-    tEl.innerHTML = tf > 0
-      ? `<span class="badge telemetry">${tf} active</span> <span class="muted">${esc(chans)}</span>`
-      : `<span class="badge normal">healthy</span>`;
-    $("sysPersist").textContent = s.alert_state_in_memory
-      ? "in-memory (resets on restart)"
-      : "durable (survives restart)";
+    $("kpiTelemetry").className = "kpi " + (tf > 0 ? "warn" : "good");
+    $("kpiTelemetry").querySelector(".val").className = "val"; $("kpiTelemetry").querySelector(".val").textContent = int(tf);
+    $("kpiTelemetry").querySelector(".meta").textContent = tf > 0 ? (s.telemetry_fault_channels || []).join(", ") : "all channels healthy";
 
-    const anomaly = s.last_is_anomaly === true;
-    $("detScore").textContent = s.last_anomaly_score == null ? "—" : fmt(s.last_anomaly_score);
-    const b = $("detBadge");
-    b.textContent = s.last_is_anomaly == null ? "no data" : (anomaly ? "ANOMALY" : "NORMAL");
-    b.className = "badge " + (anomaly ? "anomaly" : "normal");
-    $("detThreshold").textContent = fmt(s.threshold);
-    $("detWindowEnd").textContent = s.last_window_end || "—";
+    $("kpiTotal").className = "kpi";
+    $("kpiTotal").querySelector(".val").className = "val"; $("kpiTotal").querySelector(".val").textContent = int(s.total_alert_count || 0);
+    $("kpiTotal").querySelector(".meta").textContent = "since start";
 
-    if (s.last_anomaly_score != null) {
-      scores.push({ v: s.last_anomaly_score, hot: anomaly });
-      while (scores.length > MAX_SPARK) scores.shift();
-      renderSpark(s.threshold);
-    }
+    const mem = s.alert_state_in_memory;
+    $("kpiPersist").className = "kpi " + (mem ? "warn" : "good");
+    $("kpiPersist").querySelector(".val").className = "val"; $("kpiPersist").querySelector(".val").textContent = mem ? "In-memory" : "Durable";
+    $("kpiPersist").querySelector(".meta").textContent = mem ? "resets on restart" : "survives restart";
   }
 
-  function renderSpark() {
-    if (!scores.length) { $("spark").innerHTML = ""; return; }
-    const max = Math.max(...scores.map((p) => p.v)) || 1;
-    $("spark").innerHTML = scores.map((p) => {
-      const h = Math.max(2, Math.round((p.v / max) * 46));
-      return `<span class="${p.hot ? "hot" : ""}" style="height:${h}px"></span>`;
+  // ---- system card ----
+  function badge(cls, txt){ return `<span class="badge ${cls}"><span class="d"></span>${esc(txt)}</span>`; }
+  function renderSystem(s) {
+    const detOk = !!s.detector_loaded;
+    $("sysOverall").outerHTML = `<span id="sysOverall">${badge(s.status === "ok" ? "b-ok" : s.status === "degraded" ? "b-warn" : "b-muted", s.status || "—")}</span>`;
+    $("sysDetector").innerHTML = detOk ? badge("b-ok", "loaded") : badge("b-bad", "unavailable");
+    $("sysModel").textContent = s.model_type || "—";
+    $("sysShape").textContent = (s.window == null ? "—" : s.window) + " × " + (s.n_features == null ? "—" : s.n_features);
+    $("sysThreshold").textContent = fmt(s.threshold);
+    $("sysPersist").innerHTML = s.alert_state_in_memory ? badge("b-warn", "in-memory") : badge("b-ok", "durable");
+    if (s.threshold_caveat) { $("caveatWrap").hidden = false; $("caveatTxt").textContent = s.threshold_caveat; }
+  }
+
+  // ---- detection hero + chart ----
+  function renderDetection(s) {
+    const anom = s.last_is_anomaly === true;
+    const sv = s.last_anomaly_score;
+    $("detScore").textContent = sv == null ? "—" : fmt(sv, 5);
+    $("detScore").className = "score " + (sv == null ? "" : anom ? "hot" : "cool");
+    const b = $("detBadge");
+    b.className = "badge " + (s.last_is_anomaly == null ? "b-muted" : anom ? "b-bad" : "b-ok");
+    b.innerHTML = `<span class="d"></span>${s.last_is_anomaly == null ? "no data" : anom ? "ANOMALY" : "NORMAL"}`;
+    const thr = s.threshold;
+    $("detRatio").textContent = (sv == null || !thr) ? "—" : (sv / thr).toFixed(1) + "× threshold (" + fmt(thr, 3) + ")";
+    $("detWindowEnd").innerHTML = s.last_window_end ? "window " + timeCell(s.last_window_end) : "window —";
+
+    if (sv != null) {
+      const last = scores[scores.length - 1];
+      if (!last || last.v !== sv || last.we !== s.last_window_end) {
+        scores.push({ v: sv, hot: anom, we: s.last_window_end });
+        while (scores.length > MAX_POINTS) scores.shift();
+      }
+    }
+    drawChart(thr);
+  }
+
+  function drawChart(threshold) {
+    const W = 600, H = 120, pad = 6;
+    const svg = $("chart");
+    if (!scores.length) { svg.innerHTML = `<text x="300" y="64" text-anchor="middle" fill="var(--txt-3)" font-size="13">awaiting scored windows…</text>`; $("chartRange").textContent = ""; return; }
+    const vals = scores.map((p) => p.v);
+    const thr = threshold || 0;
+    const top = Math.max(...vals, thr * 1.15, 1e-9);
+    const x = (i) => pad + (scores.length === 1 ? (W - 2 * pad) / 2 : (i * (W - 2 * pad)) / (scores.length - 1));
+    const y = (v) => H - pad - (v / top) * (H - 2 * pad);
+    let grid = "";
+    for (let g = 1; g < 4; g++){ const gy = pad + (g * (H - 2*pad))/4; grid += `<line x1="${pad}" y1="${gy.toFixed(1)}" x2="${W-pad}" y2="${gy.toFixed(1)}" stroke="var(--grid-line)" stroke-width="1"/>`; }
+    const pts = scores.map((p, i) => `${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+    const area = `${pad},${H-pad} ${pts} ${(W-pad)},${H-pad}`;
+    const thrY = thr > 0 ? y(thr) : null;
+    const dots = scores.map((p, i) => p.hot ? `<circle cx="${x(i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="3.2" fill="var(--bad)"/>` : "").join("");
+    const lastP = scores[scores.length - 1];
+    svg.innerHTML = `
+      <defs><linearGradient id="agrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="var(--accent-2)" stop-opacity="0.35"/><stop offset="100%" stop-color="var(--accent-2)" stop-opacity="0"/>
+      </linearGradient></defs>
+      ${grid}
+      <polygon points="${area}" fill="url(#agrad)"/>
+      <polyline points="${pts}" fill="none" stroke="var(--accent-2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      ${thrY != null ? `<line x1="${pad}" y1="${thrY.toFixed(1)}" x2="${W-pad}" y2="${thrY.toFixed(1)}" stroke="var(--bad)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.85"/>` : ""}
+      ${dots}
+      <circle cx="${x(scores.length-1).toFixed(1)}" cy="${y(lastP.v).toFixed(1)}" r="3.6" fill="${lastP.hot ? "var(--bad)" : "var(--accent-2)"}" stroke="var(--panel)" stroke-width="1.5"/>`;
+    $("chartRange").textContent = `${scores.length} pts · peak ${fmt(Math.max(...vals), 3)}`;
+  }
+
+  // ---- active alert ----
+  function featureBars(feats) {
+    if (!feats || !feats.length) return `<div class="empty">—</div>`;
+    const max = Math.max(...feats.map((f) => Math.abs(f.error) || 0), 1e-12);
+    return feats.map((f) => {
+      const pct = Math.max(2, Math.min(100, (Math.abs(f.error) / max) * 100));
+      return `<div class="feat"><span class="fname">${esc(f.feature)}</span><span class="fval">${fmt(f.error, 4)}</span><span class="bar"><i style="width:${pct.toFixed(1)}%"></i></span></div>`;
     }).join("");
   }
-
-  function badge(ok, text) {
-    return `<span class="badge ${ok ? "normal" : "anomaly"}">${esc(text)}</span>`;
-  }
-
-  function featureList(feats) {
-    if (!feats || !feats.length) return '<div class="empty">—</div>';
-    return feats.map((f) =>
-      `<div class="feat"><span>${esc(f.feature)}</span><span>${fmt(f.error, 4)}</span></div>`).join("");
-  }
-
   function renderActive(resp) {
     const a = resp && resp.active_alert;
     const el = $("activeAlert");
-    if (!a) { el.innerHTML = '<div class="empty">No active alerts.</div>'; return; }
+    if (!a) { el.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>No active process anomaly — stream is normal.</div>`; return; }
     el.innerHTML = `
-      <div class="row"><span class="k">ID</span><span class="v">${esc(a.alert_id)}</span></div>
-      <div class="row"><span class="k">Status</span><span class="v"><span class="badge anomaly">${esc(a.status)}</span></span></div>
-      <div class="row"><span class="k">Severity</span><span class="v sev-${esc(a.severity)}">${esc(a.severity)} <span class="muted">(heuristic)</span></span></div>
-      <div class="row"><span class="k">Peak score</span><span class="v">${fmt(a.anomaly_score)}</span></div>
-      <div class="row"><span class="k">Threshold</span><span class="v">${fmt(a.threshold)}</span></div>
-      <div class="row"><span class="k">Opened</span><span class="v">${esc(a.opened_at || a.detected_at || "—")}</span></div>
-      <div class="row"><span class="k">Window span</span><span class="v">${esc(a.window_start || "—")} → ${esc(a.window_end || "—")}</span></div>
-      <div class="row"><span class="k">Windows</span><span class="v">${a.window_count}</span></div>
-      <h2 style="margin-top:12px">Top contributing features</h2>
-      ${featureList(a.top_features)}`;
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        ${badge("b-bad", a.status)}<span class="${sevClass(a.severity)}">${esc(a.severity)}</span>
+        <span class="faint" style="margin-left:auto" title="${abs(a.opened_at || a.detected_at)}">opened ${esc(timeAgo(a.opened_at || a.detected_at))}</span>
+      </div>
+      <div class="dl">
+        <div class="row"><span class="k">Incident ID</span><span class="v mono">${esc(a.alert_id)}</span></div>
+        <div class="row"><span class="k">Peak score</span><span class="v mono">${fmt(a.anomaly_score)} <span class="faint">(${a.threshold ? (a.anomaly_score/a.threshold).toFixed(1)+"×" : "—"})</span></span></div>
+        <div class="row"><span class="k">Windows in incident</span><span class="v">${int(a.window_count)}</span></div>
+        <div class="row"><span class="k">Window span</span><span class="v" style="font-size:12px">${timeCell(a.window_start)} → ${timeCell(a.window_end)}</span></div>
+      </div>
+      <div style="margin-top:12px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-3);font-weight:700">Top contributing features</div>
+      <div style="margin-top:6px">${featureBars(a.top_features)}</div>`;
   }
 
-  function renderHistory(alerts) {
-    const el = $("alertHistory");
-    if (!alerts || !alerts.length) { el.innerHTML = '<div class="empty">No alerts yet.</div>'; return; }
-    const rows = alerts.map((a) => `
-      <tr>
-        <td>${esc(a.alert_id)}</td>
-        <td><span class="badge ${a.status === "OPEN" ? "anomaly" : "normal"}">${esc(a.status)}</span></td>
-        <td class="sev-${esc(a.severity)}">${esc(a.severity)}</td>
-        <td>${fmt(a.anomaly_score)}</td>
-        <td>${a.window_count}</td>
-        <td>${esc(a.opened_at || a.detected_at || "—")}</td>
-        <td>${esc(a.closed_at || "—")}</td>
-      </tr>`).join("");
-    el.innerHTML = `<table>
-      <thead><tr><th>ID</th><th>Status</th><th>Severity</th><th>Peak score</th><th>Windows</th><th>Opened</th><th>Closed</th></tr></thead>
-      <tbody>${rows}</tbody></table>`;
-  }
-
-  // TELEMETRY_FAULT is a distinct category — never an ML anomaly. Rendered
-  // separately so an operator can tell a stuck sensor from a process anomaly.
-  function channelsOf(a) { return (a.affected_channels || []).map(esc).join(", ") || "—"; }
-
+  // ---- telemetry faults ----
+  const channelsOf = (a) => (a.affected_channels || []).map((c) => `<span class="chip">${esc(c)}</span>`).join("") || "—";
   function renderTelemetryFaults(faults) {
     const el = $("telemetryFaults");
     const active = (faults || []).filter((a) => a.status === "OPEN");
-    if (!active.length) {
-      el.innerHTML = '<div class="empty">All monitored channels healthy.</div>'; return;
-    }
+    if (!active.length) { el.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>All monitored channels healthy.</div>`; return; }
     el.innerHTML = active.map((a) => `
-      <div style="padding-bottom:10px;margin-bottom:8px;border-bottom:1px dashed var(--edge)">
-        <div class="row"><span class="k">Channel(s)</span><span class="v"><span class="chip">${channelsOf(a)}</span></span></div>
-        <div class="row"><span class="k">Status</span><span class="v"><span class="badge telemetry">${esc(a.status)}</span></span></div>
-        <div class="row"><span class="k">Frozen for</span><span class="v">${a.staleness_seconds == null ? "—" : esc(a.staleness_seconds) + " s"}</span></div>
-        <div class="row"><span class="k">Observations</span><span class="v">${a.window_count}</span></div>
-        <div class="row"><span class="k">Opened</span><span class="v">${esc(a.opened_at || a.detected_at || "—")}</span></div>
-        <div class="muted">${esc(a.reason || "STUCK_CHANNEL")}</div>
+      <div style="padding-bottom:11px;margin-bottom:11px;border-bottom:1px dashed var(--edge-soft)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">${badge("b-warn", a.status)}<span style="margin-left:auto" class="faint" title="${abs(a.opened_at || a.detected_at)}">opened ${esc(timeAgo(a.opened_at || a.detected_at))}</span></div>
+        <div style="margin-bottom:6px">${channelsOf(a)}</div>
+        <div class="dl">
+          <div class="row"><span class="k">Frozen for</span><span class="v">${dur(a.staleness_seconds)}</span></div>
+          <div class="row"><span class="k">Observations</span><span class="v">${int(a.window_count)}</span></div>
+        </div>
+        <div class="faint" style="margin-top:6px;font-size:12px">${esc(a.reason || "STUCK_CHANNEL")}</div>
       </div>`).join("");
   }
 
-  function renderTelemetryHistory(faults) {
+  // ---- history tables ----
+  const statusBadge = (st, telemetry) => st === "OPEN" ? badge(telemetry ? "b-warn" : "b-bad", "OPEN") : badge("b-muted", "CLOSED");
+  function renderProcHistory() {
+    const el = $("alertHistory");
+    const f = $("filtProc").value;
+    const rows = state.proc.filter((a) => f === "all" || a.status === f);
+    if (!rows.length) { el.innerHTML = `<div class="empty">No matching process anomalies.</div>`; return; }
+    el.innerHTML = `<div class="tablewrap"><table>
+      <thead><tr><th>ID</th><th>Status</th><th>Severity</th><th>Peak score</th><th>×thr</th><th>Windows</th><th>Opened</th><th>Closed</th></tr></thead>
+      <tbody>${rows.map((a) => `<tr>
+        <td class="mono">${esc(a.alert_id)}</td>
+        <td>${statusBadge(a.status, false)}</td>
+        <td class="${sevClass(a.severity)}">${esc(a.severity)}</td>
+        <td class="mono">${fmt(a.anomaly_score)}</td>
+        <td class="mono">${a.threshold ? (a.anomaly_score/a.threshold).toFixed(1)+"×" : "—"}</td>
+        <td>${int(a.window_count)}</td>
+        <td>${timeCell(a.opened_at || a.detected_at)}</td>
+        <td>${timeCell(a.closed_at)}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+  function renderTelHistory() {
     const el = $("telemetryHistory");
-    if (!faults || !faults.length) {
-      el.innerHTML = '<div class="empty">No telemetry faults yet.</div>'; return;
-    }
-    const rows = faults.map((a) => `
-      <tr>
-        <td>${esc(a.alert_id)}</td>
-        <td><span class="badge ${a.status === "OPEN" ? "telemetry" : "normal"}">${esc(a.status)}</span></td>
-        <td><span class="chip">${channelsOf(a)}</span></td>
-        <td>${a.staleness_seconds == null ? "—" : esc(a.staleness_seconds) + " s"}</td>
-        <td>${a.window_count}</td>
-        <td>${esc(a.opened_at || a.detected_at || "—")}</td>
-        <td>${esc(a.closed_at || "—")}</td>
-      </tr>`).join("");
-    el.innerHTML = `<table>
+    const f = $("filtTel").value;
+    const rows = state.tel.filter((a) => f === "all" || a.status === f);
+    if (!rows.length) { el.innerHTML = `<div class="empty">No matching telemetry faults.</div>`; return; }
+    el.innerHTML = `<div class="tablewrap"><table>
       <thead><tr><th>ID</th><th>Status</th><th>Channel(s)</th><th>Frozen for</th><th>Observations</th><th>Opened</th><th>Closed</th></tr></thead>
-      <tbody>${rows}</tbody></table>`;
+      <tbody>${rows.map((a) => `<tr>
+        <td class="mono">${esc(a.alert_id)}</td>
+        <td>${statusBadge(a.status, true)}</td>
+        <td>${channelsOf(a)}</td>
+        <td>${dur(a.staleness_seconds)}</td>
+        <td>${int(a.window_count)}</td>
+        <td>${timeCell(a.opened_at || a.detected_at)}</td>
+        <td>${timeCell(a.closed_at)}</td></tr>`).join("")}</tbody></table></div>`;
   }
 
+  // ---- poll ----
   async function tick() {
+    if (inFlight) return; inFlight = true;
     try {
       const [status, active, alerts] = await Promise.all([
-        getJSON("/status"),
-        getJSON("/alerts/active"),
-        getJSON("/alerts?limit=50"),
+        getJSON("/status"), getJSON("/alerts/active"), getJSON("/alerts?limit=50"),
       ]);
       setConn(true);
-      renderStatus(status);
+      renderKpis(status); renderSystem(status); renderDetection(status);
       renderActive(active);
-      // Split the unified history by category so each track reads cleanly.
-      const anomalies = alerts.filter((a) => a.category !== "TELEMETRY_FAULT");
-      const faults = alerts.filter((a) => a.category === "TELEMETRY_FAULT");
-      renderHistory(anomalies);
-      renderTelemetryFaults(faults);
-      renderTelemetryHistory(faults);
-      $("lastUpdate").textContent = "updated " + new Date().toLocaleTimeString();
-    } catch (err) {
-      setConn(false);            // graceful: banner + keep last known render
-    }
+      state.proc = (alerts || []).filter((a) => a.category !== "TELEMETRY_FAULT");
+      state.tel  = (alerts || []).filter((a) => a.category === "TELEMETRY_FAULT");
+      renderTelemetryFaults(state.tel);
+      renderProcHistory(); renderTelHistory();
+    } catch (e) {
+      setConn(false);
+    } finally { inFlight = false; }
   }
+  function schedule() { clearInterval(timer); if (!paused) timer = setInterval(tick, POLL); }
 
-  tick();
-  setInterval(tick, POLL);
+  // ---- controls ----
+  function setTheme(t) { document.documentElement.setAttribute("data-theme", t); try { localStorage.setItem("ics-theme", t); } catch (_) {}
+    $("themeIco").innerHTML = t === "light"
+      ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/>'
+      : '<path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/>'; }
+  function setPaused(p) { paused = p; $("btnPause").classList.toggle("active", !p); $("btnPause").setAttribute("aria-pressed", String(p));
+    $("pauseTxt").textContent = p ? "Paused" : "Live";
+    $("pauseIco").innerHTML = p ? '<path d="M7 5l12 7-12 7z"/>' : '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>';
+    setConn($("conn").classList.contains("ok")); schedule(); }
+
+  $("btnTheme").addEventListener("click", () => setTheme(document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light"));
+  $("btnPause").addEventListener("click", () => setPaused(!paused));
+  $("btnRefresh").addEventListener("click", () => tick());
+  $("filtProc").addEventListener("change", renderProcHistory);
+  $("filtTel").addEventListener("change", renderTelHistory);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) clearInterval(timer); else { schedule(); tick(); } });
+
+  // ---- boot ----
+  try { setTheme(localStorage.getItem("ics-theme") || "dark"); } catch (_) { setTheme("dark"); }
+  $("cfgApi").textContent = API; $("cfgPoll").textContent = POLL + " ms";
+  tickClock(); setInterval(tickClock, 1000);
+  tick(); schedule();
 })();
 </script>
 </body>

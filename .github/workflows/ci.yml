@@ -2,9 +2,12 @@
 # TranAD anomaly-detection service.
 #
 # This pipeline VALIDATES the repository before changes reach `main`. It runs
-# six security/quality gates plus a real Docker build + image scan. It does NOT
-# deploy, publish images, or touch the ML artifacts, threshold, or the licensed
-# SWaT dataset (which is never present in CI).
+# six security/quality gates plus a real Docker build + image scan. On push to
+# `main` (and only then, after the five code gates pass) the container gate
+# ALSO publishes the two production images to Docker Hub (`:latest` + the
+# commit SHA) - pushing the exact images it just scanned, with no rebuild. It
+# does NOT deploy to any host, run Terraform, or touch the ML artifacts,
+# threshold, or the licensed SWaT dataset (which is never present in CI).
 #
 # Fail policy (authoritative copy: docs/provenance/phase9_devsecops.md):
 #   * lint      -> genuine Python errors (pyflakes F + syntax E9)
@@ -199,20 +202,30 @@ jobs:
       - name: gitleaks detect (full history)
         run: gitleaks detect --source . --no-banner --redact --verbose
 
-  # --------------------------------------------- Gate 6: container build + scan
+  # --------------------------------- Gate 6: container build + scan (+ publish)
   container:
     name: "Gate 6 - Docker build + image scan (trivy)"
     runs-on: ubuntu-latest
+    # Build + scan the images ONCE here. On a push to `main` the SAME scanned
+    # images are then pushed to Docker Hub from this very job - no second build,
+    # so what ships is byte-for-byte what Trivy scanned. To guarantee we never
+    # publish an image whose code failed another gate, this job waits for the
+    # five code gates to pass first (publishing is only reached if they did).
+    needs: [lint, tests, sast, deps, secrets]
+    env:
+      BACKEND_IMAGE: kerolosyousef/ics-guardian-backend
+      FRONTEND_IMAGE: kerolosyousef/ics-guardian-frontend
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # Build the REAL backend image from the production Dockerfile. No CI-only
-      # Dockerfile, no vulnerability-hiding tricks. The SWaT dataset is excluded
-      # by .dockerignore and never enters the build context/layers.
+      # Build the REAL backend image from the production Dockerfile, for the EC2
+      # target arch (linux/amd64, same as Phase 10B). No CI-only Dockerfile, no
+      # vulnerability-hiding tricks. The SWaT dataset is excluded by
+      # .dockerignore and never enters the build context/layers.
       - name: Build backend image (production Dockerfile)
-        run: docker build -f docker/backend.Dockerfile -t ics-guardian-backend:ci .
+        run: docker build --platform linux/amd64 -f docker/backend.Dockerfile -t ics-guardian-backend:ci .
       # Build the frontend image too (static nginx dashboard) to prove it packs.
       - name: Build frontend image
-        run: docker build -f docker/frontend.Dockerfile -t ics-guardian-frontend:ci .
+        run: docker build --platform linux/amd64 -f docker/frontend.Dockerfile -t ics-guardian-frontend:ci .
       # Scan OS packages + application dependencies for BOTH production images.
       # Detection stays fully ON (HIGH,CRITICAL). Blocking is limited to FIXABLE
       # findings (--ignore-unfixed): unfixed base-OS CVEs are reported, not
@@ -244,6 +257,41 @@ jobs:
           exit-code: "1"
           trivyignores: .trivyignore
           format: table
+
+      # ---------------------------------------------- Publish (main push only)
+      # Everything below runs ONLY on a push to `main` (never pull_request, so
+      # fork PRs never see the credentials). It re-tags and pushes the exact
+      # images built and scanned above - no rebuild - with both the immutable
+      # commit SHA and the moving `:latest` tag, matching the Phase 10B
+      # convention (docs/provenance/phase10b_ec2_deployment.md). Requires repo
+      # secrets DOCKERHUB_USERNAME (namespace) and DOCKERHUB_TOKEN (access token
+      # with read+write scope).
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        # Token piped on stdin (never a command-line arg) so it stays out of the
+        # process table and the rendered command; Actions also masks it in logs.
+        run: echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+      - name: Tag + push scanned images (SHA + latest)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        # GITHUB_SHA is the full 40-char commit SHA, matching the documented
+        # `git rev-parse HEAD` tag. These re-tag the already-scanned local
+        # images; nothing is rebuilt.
+        run: |
+          docker tag ics-guardian-backend:ci  "${BACKEND_IMAGE}:${GITHUB_SHA}"
+          docker tag ics-guardian-backend:ci  "${BACKEND_IMAGE}:latest"
+          docker tag ics-guardian-frontend:ci "${FRONTEND_IMAGE}:${GITHUB_SHA}"
+          docker tag ics-guardian-frontend:ci "${FRONTEND_IMAGE}:latest"
+          docker push "${BACKEND_IMAGE}:${GITHUB_SHA}"
+          docker push "${BACKEND_IMAGE}:latest"
+          docker push "${FRONTEND_IMAGE}:${GITHUB_SHA}"
+          docker push "${FRONTEND_IMAGE}:latest"
+      # Always drop the stored credentials from the runner's docker config.
+      - name: Log out of Docker Hub
+        if: always()
+        run: docker logout
 
   # ------------------------------------------------------- Final required gate
   ci-gate:

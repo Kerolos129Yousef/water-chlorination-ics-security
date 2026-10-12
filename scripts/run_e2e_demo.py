@@ -6,10 +6,13 @@ production components unchanged -- it adds no detection logic and owns no buffer
 
     SWaTReplay ─▶ RollingWindow ─▶ POST /score (FastAPI) ─▶ TranADDetector ─▶ result
 
-Two modes, one pipeline (identical preprocessing and decision for both):
+Three modes, one pipeline (identical preprocessing and decision for all):
 
     python scripts/run_e2e_demo.py --mode normal      # a clean segment -> stays normal
     python scripts/run_e2e_demo.py --mode attack      # an attack segment -> anomaly flagged
+    python scripts/run_e2e_demo.py --mode continuous  # the WHOLE dataset, chronological,
+                                                       # paced at real time; --loop to repeat.
+                                                       # Behaves like a live sensor feed.
 
 Transport
 ---------
@@ -96,6 +99,10 @@ def _select_range(replay: SWaTReplay, mode: str, max_windows: int, scorer,
     """
     if mode == "normal":
         start, stop = replay.normal_range(min_samples=WINDOW)
+    elif mode == "continuous":
+        # The WHOLE dataset in chronological order: every normal stretch and
+        # every attack segment, exactly as recorded. No segment selection.
+        start, stop = 0, len(replay)
     else:
         idx = attack_segment if attack_segment is not None else _select_attack_segment(replay, scorer)
         seg = replay.attack_segments[idx]
@@ -108,16 +115,31 @@ def _select_range(replay: SWaTReplay, mode: str, max_windows: int, scorer,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--mode", choices=("normal", "attack"), default="attack")
+    parser.add_argument("--mode", choices=("normal", "attack", "continuous"), default="attack",
+                        help="normal/attack = one segment (quick demo); "
+                             "continuous = the WHOLE dataset, chronological, until Ctrl-C.")
     parser.add_argument("--base-url", default=None,
                         help="Score against a running server over real HTTP (default: in-process).")
-    parser.add_argument("--max-windows", type=int, default=40,
-                        help="Cap emitted windows for a quick demo (0 = whole segment).")
+    parser.add_argument("--max-windows", type=int, default=None,
+                        help="Cap emitted windows (0 = whole range). "
+                             "Default: 40 for normal/attack, 0 (full dataset) for continuous.")
     parser.add_argument("--attack-segment", type=int, default=None,
                         help="Attack segment index (default: auto-select the clearest).")
-    parser.add_argument("--real-time-factor", type=float, default=float("inf"),
-                        help="Playback speed: inf = no wait (default), 60 = 60x live, 1 = real 5 s/step.")
+    parser.add_argument("--real-time-factor", type=float, default=None,
+                        help="Playback speed: inf = no wait, 60 = 60x live, 1 = real 5 s/step. "
+                             "Default: inf for normal/attack, 1 (real time) for continuous.")
+    parser.add_argument("--loop", action="store_true",
+                        help="Continuous mode only: restart from the start at end-of-dataset "
+                             "(runs forever until Ctrl-C).")
     args = parser.parse_args()
+
+    # Mode-aware defaults: existing normal/attack behaviour is unchanged
+    # (as-fast-as-possible, 40-window cap); continuous streams the full dataset
+    # at real time by default so it behaves like a live sensor feed.
+    rtf = args.real_time_factor if args.real_time_factor is not None else (
+        1.0 if args.mode == "continuous" else float("inf"))
+    mw = args.max_windows if args.max_windows is not None else (
+        0 if args.mode == "continuous" else 40)
 
     try:
         replay = SWaTReplay.from_artifacts()          # loads the clean Attack_v0 reconstruction
@@ -128,39 +150,78 @@ def main() -> int:
         return 2
 
     scorer, _client = _build_scorer(args.base_url)
-    start, stop = _select_range(replay, args.mode, args.max_windows, scorer, args.attack_segment)
+    start, stop = _select_range(replay, args.mode, mw, scorer, args.attack_segment)
+    n_windows = max(0, (stop - start) - WINDOW + 1)
 
-    print(f"[mode] {args.mode}  [range] samples [{start}, {stop})  "
-          f"({stop - start} samples → {max(0, (stop - start) - WINDOW + 1)} windows)")
+    if args.mode == "continuous":
+        pace = ("real time (5 s/window)" if rtf == 1 else
+                "as fast as possible" if rtf == float("inf") else f"{rtf}x live")
+        print(f"[continuous] streaming the FULL dataset chronologically: "
+              f"{len(replay)} samples · {len(replay.attack_segments)} attack segments · ~{n_windows} windows")
+        print(f"[pacing] {pace}{'  [looping]' if args.loop else ''}   —   press Ctrl-C to stop")
+    else:
+        print(f"[mode] {args.mode}  [range] samples [{start}, {stop})  "
+              f"({stop - start} samples → {n_windows} windows)")
     print("-" * 88)
 
     total = anomalies = attack_windows = detected_attacks = false_positives = 0
-    for r in run_pipeline(replay, scorer, start=start, stop=stop,
-                          real_time_factor=args.real_time_factor):
-        total += 1
-        anomalies += int(r.is_anomaly)
-        gt_attack = r.contains_attack
-        attack_windows += int(gt_attack)
-        detected_attacks += int(gt_attack and r.is_anomaly)
-        false_positives += int((not gt_attack) and r.is_anomaly)
+    prev_anom = False
 
-        flag = "ANOMALY" if r.is_anomaly else "normal "
-        gt = "attack" if gt_attack else "normal"
-        top = ", ".join(f"{name}={err:.4g}" for name, err in r.top_features(3))
-        print(f"{r.window_end}  [{flag}] score={r.anomaly_score:.6g} "
-              f"thr={r.threshold:.6g}  gt={gt}  top: {top}")
+    def consume() -> None:
+        nonlocal total, anomalies, attack_windows, detected_attacks, false_positives, prev_anom
+        for r in run_pipeline(replay, scorer, start=start, stop=stop, real_time_factor=rtf):
+            total += 1
+            anomalies += int(r.is_anomaly)
+            gt_attack = r.contains_attack
+            attack_windows += int(gt_attack)
+            detected_attacks += int(gt_attack and r.is_anomaly)
+            false_positives += int((not gt_attack) and r.is_anomaly)
 
-    print("-" * 88)
-    print(f"windows scored     : {total}")
-    print(f"flagged anomalous  : {anomalies}")
-    if args.mode == "attack":
-        rate = (detected_attacks / attack_windows) if attack_windows else 0.0
-        print(f"attack windows     : {attack_windows}")
-        print(f"detected (recall)  : {detected_attacks} ({rate:.1%})")
-    else:
-        fpr = (false_positives / total) if total else 0.0
-        print(f"false positives    : {false_positives} ({fpr:.1%})")
-        print("note: threshold FPR caveat applies — see docs/provenance/tranad_swat_provenance.md §5")
+            # Highlight each normal<->anomaly transition so a long live stream is
+            # readable at a glance (the dashboard shows the same flips visually).
+            if args.mode == "continuous" and r.is_anomaly != prev_anom:
+                print(f"{'>>> ANOMALY ONSET' if r.is_anomaly else '<<< recovered to normal'}  @ {r.window_end}")
+            prev_anom = r.is_anomaly
+
+            flag = "ANOMALY" if r.is_anomaly else "normal "
+            gt = "attack" if gt_attack else "normal"
+            top = ", ".join(f"{name}={err:.4g}" for name, err in r.top_features(3))
+            print(f"{r.window_end}  [{flag}] score={r.anomaly_score:.6g} "
+                  f"thr={r.threshold:.6g}  gt={gt}  top: {top}")
+
+            if args.mode == "continuous" and total % 200 == 0:
+                rate = (detected_attacks / attack_windows) if attack_windows else 0.0
+                print(f"    … {total} windows · {anomalies} anomalous · recall {rate:.1%} so far")
+
+    def summary() -> None:
+        print("-" * 88)
+        print(f"windows scored     : {total}")
+        print(f"flagged anomalous  : {anomalies}")
+        if args.mode == "normal":
+            fpr = (false_positives / total) if total else 0.0
+            print(f"false positives    : {false_positives} ({fpr:.1%})")
+            print("note: threshold FPR caveat applies — see docs/provenance/tranad_swat_provenance.md §5")
+        else:
+            rate = (detected_attacks / attack_windows) if attack_windows else 0.0
+            print(f"attack windows     : {attack_windows}")
+            print(f"detected (recall)  : {detected_attacks} ({rate:.1%})")
+            if args.mode == "continuous":
+                normal_windows = total - attack_windows
+                fpr = (false_positives / normal_windows) if normal_windows else 0.0
+                print(f"false positives    : {false_positives} ({fpr:.1%} of normal windows)")
+
+    try:
+        if args.mode == "continuous" and args.loop:
+            pass_no = 0
+            while True:
+                pass_no += 1
+                print(f"--- pass {pass_no} (restarting from the beginning) ---")
+                consume()
+        else:
+            consume()
+    except KeyboardInterrupt:
+        print("\n[stopped by user]")
+    summary()
     return 0
 
 
