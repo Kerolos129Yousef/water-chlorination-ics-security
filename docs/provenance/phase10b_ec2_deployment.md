@@ -52,10 +52,41 @@ No resources were created or modified during the audit.
   user-data, Terraform, or git.
 - **Image names:** `kerolosyousef/ics-guardian-backend`,
   `kerolosyousef/ics-guardian-frontend`.
-- **Tags:** immutable **commit-SHA** (e.g. `:<sha>`). A `:latest` tag may be
-  added additionally but the deploy always references the commit SHA.
-- **Not done here:** no push. Publishing is an outward action requiring the
-  owner's go-ahead and an interactive `docker login` on the owner's machine.
+- **Tags:** immutable **commit-SHA** (full 40-char, e.g. `:<sha>`) **plus**
+  a moving `:latest`. The deploy always references the commit SHA, never
+  `:latest`, so a rollout is reproducible and roll-back-able.
+- **Publishing (now automated in CI — see §2a):** on every push to `main`, the
+  CI `container` gate re-tags and pushes the exact images it just built and
+  Trivy-scanned. The manual `docker login` + build + push runbook in §9 Step 0
+  is retained as a fallback only (e.g. CI outage, or a one-off out-of-band
+  publish).
+
+---
+
+## 2a. Automated publish in CI (added 2026-10-13)
+
+Image publishing is no longer a manual owner step. The CI workflow
+(`.github/workflows/ci.yml`, `container` gate) now builds **once**, Trivy-scans
+that image, and — **only on a push to `main`** — pushes the **same scanned
+bytes** to Docker Hub. Key properties:
+
+- **Build-once / scan-exactly-what-ships:** the push re-tags the already-scanned
+  local `:ci` images (`docker tag` + `docker push`); nothing is rebuilt, so the
+  published image is byte-for-byte what the gate scanned.
+- **Dependent, not parallel:** the `container` gate declares
+  `needs: [lint, tests, sast, deps, secrets]`, so the push steps are only ever
+  reached after the five code gates pass. An image whose code failed any gate is
+  never published.
+- **`main`-only, PR-safe:** the login/tag/push steps are guarded by
+  `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`. Pull
+  requests (including from forks) build + scan but never push and never see the
+  credentials.
+- **Tags pushed:** `kerolosyousef/ics-guardian-{backend,frontend}:<full-sha>`
+  **and** `:latest`, for the `linux/amd64` EC2 target.
+- **Credentials:** repo secrets `DOCKERHUB_USERNAME` (namespace) and
+  `DOCKERHUB_TOKEN` (access token, read+write scope). The token is piped to
+  `docker login` on stdin (never a CLI arg) and `docker logout` runs
+  `if: always()`. No secret touches the host, user-data, Terraform, or git.
 
 ---
 
@@ -201,7 +232,9 @@ Assumes **no Free Tier** (conservative) and 24/7 running:
 ## 9. Exact deployment commands (run after owner approval)
 
 ```bash
-# 0) PUBLISH IMAGES (owner's machine; interactive login, no tokens in shell/git)
+# 0) PUBLISH IMAGES — FALLBACK ONLY. CI now publishes automatically on push to
+#    main (see §2a); run this by hand only during a CI outage or an out-of-band
+#    publish. (owner's machine; interactive login, no tokens in shell/git)
 SHA=$(git rev-parse HEAD)
 docker login                           # interactive; never paste tokens in chat
 docker build --platform linux/amd64 -f docker/backend.Dockerfile  -t kerolosyousef/ics-guardian-backend:$SHA  .
