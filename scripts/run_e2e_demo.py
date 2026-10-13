@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -169,7 +170,8 @@ def main() -> int:
 
     def consume() -> None:
         nonlocal total, anomalies, attack_windows, detected_attacks, false_positives, prev_anom
-        for r in run_pipeline(replay, scorer, start=start, stop=stop, real_time_factor=rtf):
+        for r in run_pipeline(replay, scorer, start=start, stop=stop,
+                              real_time_factor=rtf, sleeper=time.sleep):
             total += 1
             anomalies += int(r.is_anomaly)
             gt_attack = r.contains_attack
