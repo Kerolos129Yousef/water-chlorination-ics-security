@@ -33,3 +33,22 @@ module "compute" {
   root_volume_size_gb = var.root_volume_size_gb
   tags                = local.common_tags
 }
+
+# CI/CD deploy identity: the IAM role GitHub Actions assumes via OIDC to run the
+# SSM-driven deploy. Created regardless of whether CD is wired up yet; it is
+# free and inert until the workflow's deploy job assumes it. ssm:SendCommand is
+# scoped to this environment's app instance(s) by tag.
+module "cicd" {
+  source = "../../modules/cicd"
+
+  name_prefix        = local.name_prefix
+  github_owner       = var.github_owner
+  github_repo        = var.github_repo
+  github_environment = var.deploy_environment
+  region             = var.region
+  instance_tags = {
+    Project     = var.project
+    Environment = var.environment
+  }
+  tags = local.common_tags
+}

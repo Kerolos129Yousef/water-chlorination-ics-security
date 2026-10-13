@@ -72,3 +72,28 @@ variable "ssm_ami_parameter" {
   type        = string
   default     = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 }
+
+# --- CI/CD (GitHub Actions OIDC deploy role) -------------------------------
+
+variable "github_owner" {
+  description = "GitHub org/user that owns the repo; half of the OIDC trust subject."
+  type        = string
+  default     = "Kerolos129Yousef"
+}
+
+variable "github_repo" {
+  description = "GitHub repository name; half of the OIDC trust subject."
+  type        = string
+  default     = "water-chlorination-ics-security"
+}
+
+variable "deploy_environment" {
+  description = <<-EOT
+    GitHub Actions Environment that gates deploys and is the OIDC trust subject
+    (`repo:<owner>/<repo>:environment:<this>`). Must match the `environment:` in
+    the workflow deploy job, and should have required-reviewer protection so a
+    deploy needs manual approval.
+  EOT
+  type        = string
+  default     = "production"
+}

@@ -5,9 +5,12 @@
 # six security/quality gates plus a real Docker build + image scan. On push to
 # `main` (and only then, after the five code gates pass) the container gate
 # ALSO publishes the two production images to Docker Hub (`:latest` + the
-# commit SHA) - pushing the exact images it just scanned, with no rebuild. It
-# does NOT deploy to any host, run Terraform, or touch the ML artifacts,
-# threshold, or the licensed SWaT dataset (which is never present in CI).
+# commit SHA) - pushing the exact images it just scanned, with no rebuild.
+# Finally, on push to `main`, an approval-gated `deploy` job rolls the new
+# commit-SHA images onto the EC2 instance via AWS SSM (OIDC auth, no stored AWS
+# keys; waits on the `production` Environment's required-reviewer gate). It does
+# NOT run Terraform, and never touches the ML artifacts, threshold, or the
+# licensed SWaT dataset (which is never present in CI).
 #
 # Fail policy (authoritative copy: docs/provenance/phase9_devsecops.md):
 #   * lint      -> genuine Python errors (pyflakes F + syntax E9)
@@ -316,3 +319,107 @@ jobs:
             && test "${{ needs.container.result }}" = "success" \
             || { echo "::error::One or more DevSecOps gates failed"; exit 1; }
           echo "All DevSecOps gates passed."
+
+  # ------------------------------------------------- CD: deploy to EC2 (CD)
+  # Continuous deployment to the single EC2 instance, via AWS SSM RunCommand -
+  # the same mechanism as the manual runbook (deploy/deploy.sh), just driven by
+  # CI. Safeguards:
+  #   * needs ci-gate  -> every DevSecOps gate (incl. the image publish) passed.
+  #   * push to main   -> never runs on pull_request / forks.
+  #   * environment    -> gated by the `production` GitHub Environment; configure
+  #                       required reviewers there so each deploy needs manual
+  #                       approval before it can start (and before AWS creds are
+  #                       even issued - the OIDC trust is pinned to this env).
+  #   * OIDC           -> assumes a short-lived, least-privilege IAM role; no
+  #                       long-lived AWS keys are stored in GitHub.
+  # The image tag deployed is the immutable commit SHA (never :latest), so a
+  # rollout is reproducible and a rollback is just a re-run at an older SHA.
+  #
+  # Requires: repo secret AWS_DEPLOY_ROLE_ARN (Terraform output
+  # `github_deploy_role_arn`) and a `production` Environment with reviewers.
+  deploy:
+    name: "CD - Deploy to EC2 via SSM (main only, approval-gated)"
+    runs-on: ubuntu-latest
+    needs: [ci-gate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    # OIDC needs id-token: write; this job-level block replaces the read-only
+    # workflow default (which it must re-declare contents: read under).
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: eu-central-1
+      # Tag filter identifying the target instance (matches the Terraform tags).
+      TAG_PROJECT: ics-guardian
+      TAG_ENVIRONMENT: dev
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Resolve target instance id
+        id: target
+        run: |
+          set -euo pipefail
+          id="$(aws ec2 describe-instances \
+            --region "$AWS_REGION" \
+            --filters "Name=tag:Project,Values=$TAG_PROJECT" \
+                      "Name=tag:Environment,Values=$TAG_ENVIRONMENT" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' --output text)"
+          # Expect exactly one running instance.
+          count="$(printf '%s\n' $id | grep -c . || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::expected exactly 1 running instance (Project=$TAG_PROJECT, Environment=$TAG_ENVIRONMENT), found: '${id:-none}'. Is the infra applied?"
+            exit 1
+          fi
+          echo "instance_id=$id" >> "$GITHUB_OUTPUT"
+          echo "Target instance: $id"
+      - name: Deploy via SSM RunCommand
+        id: send
+        run: |
+          set -euo pipefail
+          INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
+          # Pin BOTH the image tag and the fetched scripts/compose to this exact
+          # commit (raw.githubusercontent at $GITHUB_SHA), so the deploy is fully
+          # reproducible. deploy.sh pulls the SHA-tagged images and starts them.
+          RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}"
+          CMD="curl -fsSL '${RAW_BASE}/deploy/deploy.sh' -o /tmp/ics-deploy.sh && sudo ICS_IMAGE_TAG='${GITHUB_SHA}' ICS_RAW_BASE='${RAW_BASE}' bash /tmp/ics-deploy.sh"
+          command_id="$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "CD deploy ${GITHUB_SHA:0:12} (run ${GITHUB_RUN_ID})" \
+            --parameters commands="$CMD" \
+            --query 'Command.CommandId' --output text)"
+          echo "command_id=$command_id" >> "$GITHUB_OUTPUT"
+          echo "SSM CommandId: $command_id"
+      - name: Wait for deploy + verify
+        run: |
+          set -euo pipefail
+          INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
+          CMD_ID="${{ steps.send.outputs.command_id }}"
+          status="Pending"
+          # Poll up to ~20 min (image pull of the torch backend can take minutes).
+          for i in $(seq 1 120); do
+            status="$(aws ssm get-command-invocation \
+              --region "$AWS_REGION" --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --query 'Status' --output text 2>/dev/null || echo Pending)"
+            case "$status" in
+              Success|Failed|Cancelled|TimedOut) break ;;
+            esac
+            echo "  deploy status: $status ($i/120)"; sleep 10
+          done
+          echo "----- deploy stdout -----"
+          aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" --query 'StandardOutputContent' --output text || true
+          echo "----- deploy stderr -----"
+          aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" --query 'StandardErrorContent' --output text || true
+          if [ "$status" != "Success" ]; then
+            echo "::error::SSM deploy finished with status=$status"
+            exit 1
+          fi
+          echo "Deploy OK (commit ${GITHUB_SHA})."

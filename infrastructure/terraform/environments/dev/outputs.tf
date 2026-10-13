@@ -32,3 +32,8 @@ output "data_volume_id" {
   description = "ID of the dedicated EBS data volume (/data, SQLite). Back up with: aws ec2 create-snapshot --volume-id <id>."
   value       = module.compute.data_volume_id
 }
+
+output "github_deploy_role_arn" {
+  description = "ARN GitHub Actions assumes via OIDC. Set it as the repo secret AWS_DEPLOY_ROLE_ARN for the CD deploy job."
+  value       = module.cicd.deploy_role_arn
+}

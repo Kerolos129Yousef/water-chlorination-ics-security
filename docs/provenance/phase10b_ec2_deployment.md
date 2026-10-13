@@ -90,6 +90,54 @@ bytes** to Docker Hub. Key properties:
 
 ---
 
+## 2b. Automated deploy to EC2 — CD (added 2026-10-13)
+
+The pipeline now has a CD stage. After images publish (§2a), the CI workflow's
+`deploy` job rolls the new commit-SHA images onto the EC2 instance **via AWS
+SSM RunCommand** — the exact mechanism of the manual runbook (§9), just driven
+by CI. It reuses `deploy/deploy.sh` + `deploy/docker-compose.aws.yml` unchanged.
+
+**Flow:** push to `main` → gates + publish (§2a) → `deploy` job waits on the
+`production` GitHub Environment's **required-reviewer approval** → on approval it
+assumes the AWS role via **OIDC**, resolves the running instance by tag, and
+`ssm:SendCommand`s `deploy.sh` with `ICS_IMAGE_TAG=$GITHUB_SHA` +
+`ICS_RAW_BASE=…/<sha>` → polls to completion (≤20 min) and fails the job on any
+non-`Success` status.
+
+**Security properties:**
+
+- **No long-lived AWS keys in GitHub.** A GitHub OIDC token is exchanged for
+  short-lived STS creds. The trust policy is pinned to
+  `repo:<owner>/<repo>:environment:production` — so only a job running in the
+  approved Environment can assume it.
+- **Least privilege.** The role (`ics-guardian-dev-github-deploy`) grants only
+  `ec2:DescribeInstances`, `ssm:SendCommand` (on `AWS-RunShellScript` **and**
+  tag-scoped to `Project=ics-guardian, Environment=dev` instances), and the SSM
+  invocation read actions. No push/deploy secret ever touches the host.
+- **Approval-gated.** Nothing reaches AWS unattended; a human approves each
+  deploy in the Environment gate.
+- **Reproducible + rollback.** Always deploys the immutable commit SHA, never
+  `:latest`. Rollback = re-run the workflow at an older commit (or SSM-run
+  `deploy.sh` with a previous `ICS_IMAGE_TAG`).
+
+**Terraform:** new `infrastructure/terraform/modules/cicd` (GitHub OIDC provider
++ the scoped deploy role), wired into `environments/dev` and exposed as the
+`github_deploy_role_arn` output.
+
+**One-time setup required before CD runs (owner):**
+
+1. `terraform apply` the dev environment (creates the instance **and** the OIDC
+   role).
+2. Copy the `github_deploy_role_arn` output into a repo **secret**
+   `AWS_DEPLOY_ROLE_ARN`.
+3. In GitHub → Settings → Environments, create **`production`** and add yourself
+   as a **required reviewer** (this is what makes the deploy approval-gated).
+
+Region is pinned to `eu-central-1` in the workflow (matches the Terraform
+default); update the `AWS_REGION` env there if the region ever changes.
+
+---
+
 ## 3. Application + routing (inspected, minimal change made)
 
 - The dashboard (`frontend/index.html`) built API URLs from
