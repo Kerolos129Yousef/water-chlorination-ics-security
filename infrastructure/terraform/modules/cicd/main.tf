@@ -35,9 +35,17 @@ resource "aws_iam_openid_connect_provider" "github" {
   tags = var.tags
 }
 
-# Trust policy: only `repo:<owner>/<repo>:environment:<env>` may assume, and only
+# Trust policy: only this repo's `environment:<env>` jobs may assume, and only
 # with the sts.amazonaws.com audience. Pinning to the Environment (not a branch)
 # means the protected-Environment approval gate guards credential issuance.
+#
+# NOTE on the `sub` pattern: GitHub's OIDC subject for this repo carries the
+# numeric org/repo IDs inline, i.e.
+#   repo:<owner>@<orgId>/<repo>@<repoId>:environment:<env>
+# (verified against the live token via CloudTrail). An exact StringEquals on
+# `repo:<owner>/<repo>:environment:<env>` therefore never matches. We use a
+# StringLike with `*` after the owner and repo so it matches regardless of the
+# embedded IDs, while staying tightly scoped to THIS owner, repo, and env.
 data "aws_iam_policy_document" "assume" {
   statement {
     effect  = "Allow"
@@ -55,9 +63,9 @@ data "aws_iam_policy_document" "assume" {
     }
 
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_owner}/${var.github_repo}:environment:${var.github_environment}"]
+      values   = ["repo:${var.github_owner}*/${var.github_repo}*:environment:${var.github_environment}"]
     }
   }
 }
