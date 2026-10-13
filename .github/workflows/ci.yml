@@ -387,12 +387,16 @@ jobs:
           # reproducible. deploy.sh pulls the SHA-tagged images and starts them.
           RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}"
           CMD="curl -fsSL '${RAW_BASE}/deploy/deploy.sh' -o /tmp/ics-deploy.sh && sudo ICS_IMAGE_TAG='${GITHUB_SHA}' ICS_RAW_BASE='${RAW_BASE}' bash /tmp/ics-deploy.sh"
+          # Build the --parameters payload as JSON (jq escapes the command safely).
+          # Passing it as `file://` avoids the aws-cli shorthand parser, which
+          # chokes on the quotes and `&&` in the command string.
+          jq -n --arg cmd "$CMD" '{commands: [$cmd]}' > /tmp/ssm-params.json
           command_id="$(aws ssm send-command \
             --region "$AWS_REGION" \
             --instance-ids "$INSTANCE_ID" \
             --document-name AWS-RunShellScript \
             --comment "CD deploy ${GITHUB_SHA:0:12} (run ${GITHUB_RUN_ID})" \
-            --parameters commands="$CMD" \
+            --parameters file:///tmp/ssm-params.json \
             --query 'Command.CommandId' --output text)"
           echo "command_id=$command_id" >> "$GITHUB_OUTPUT"
           echo "SSM CommandId: $command_id"
