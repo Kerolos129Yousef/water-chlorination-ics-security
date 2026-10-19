@@ -14,8 +14,14 @@ services:
       context: .
       dockerfile: docker/backend.Dockerfile
     image: ics-guardian-backend:phase8a
+    # Email alerting config (ALERT_EMAIL_*) is read from .env, which is
+    # git-ignored so the SMTP password never lands in the repo. Absent .env =>
+    # vars unset => email stays OFF (identical to prior behaviour).
+    env_file:
+      - .env
     environment:
       # Durable persistence, explicit (requirement of this phase).
+      # NOTE: values here OVERRIDE env_file, so storage stays sqlite regardless.
       ALERT_STORAGE_BACKEND: sqlite
       ALERT_DB_PATH: /data/alerts.sqlite3
     ports:

@@ -28,6 +28,7 @@ from .alert import (
     severity_for,
 )
 from .engine import AlertEngine, ChannelHealthLike, DetectionLike, TelemetryHealthLike
+from .notifier import EmailNotifier
 from .store import (
     AlertStore,
     AlertStoreError,
@@ -42,6 +43,7 @@ __all__ = [
     "DetectionLike",
     "TelemetryHealthLike",
     "ChannelHealthLike",
+    "EmailNotifier",
     "Alert",
     "AlertStatus",
     "Severity",

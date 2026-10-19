@@ -33,7 +33,7 @@ alert right now?".
 from __future__ import annotations
 
 import logging
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 from .alert import (
     DEFAULT_CATEGORY,
@@ -134,11 +134,18 @@ class AlertEngine:
         top_n: int = 5,
         category: str = DEFAULT_CATEGORY,
         store: AlertStore | None = None,
+        notifier: Callable[[Alert], None] | None = None,
     ) -> None:
         if top_n < 1:
             raise ValueError(f"top_n must be >= 1, got {top_n}")
         self.top_n = top_n
         self.category = category
+        # Optional fan-out called once per NEWLY OPENED incident (not on extend --
+        # dedup means one continuous anomaly fires one notification). Kept as an
+        # injected callback so the engine imports no email/transport code and the
+        # boundary is preserved; EmailNotifier.from_env() supplies the email one.
+        # A notifier failure can never break the lifecycle -- see _notify.
+        self._notifier = notifier
         # Persistence sits BEHIND the engine: the engine makes every lifecycle
         # decision, the store only makes the results durable. Default = in-memory
         # (identical to pre-Phase-7 behaviour); inject SQLiteAlertStore for durability.
@@ -358,7 +365,26 @@ class AlertEngine:
         # dangling in-memory incident (open stays consistent with the store).
         self._store.upsert(alert)
         self._active = alert
+        # Notify only after the incident is durably opened and adopted, so a
+        # notification can never describe an alert that failed to persist.
+        self._notify(alert)
         return alert
+
+    def _notify(self, alert: Alert) -> None:
+        """Fan a newly opened incident out to the notifier, best-effort.
+
+        Deliberately swallow-and-log: the alert is already persisted and adopted
+        before we get here, so a broken/slow notifier must never roll back the
+        lifecycle or surface as an error to the detection path.
+        """
+        if self._notifier is None:
+            return
+        try:
+            self._notifier(alert)
+        except Exception:  # noqa: BLE001 - notification must not break the lifecycle
+            logger.exception(
+                "alert notifier failed for %s; lifecycle unaffected", alert.alert_id
+            )
 
     def _extend(self, alert: Alert, we, score, threshold, top) -> Alert:
         """Merge another anomalous window into the open alert (dedup)."""
