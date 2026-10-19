@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from alerting import AlertEngine, InMemoryAlertStore, alert_store_from_env
+from alerting import AlertEngine, EmailNotifier, InMemoryAlertStore, alert_store_from_env
 from alerting.alert import Alert
 from ml.src.detector import TranADDetector
 
@@ -79,7 +79,13 @@ def create_app(
     app.state.detector = detector
     app.state.alert_engine = (
         alert_engine if alert_engine is not None
-        else AlertEngine(store=alert_store_from_env())
+        else AlertEngine(
+            store=alert_store_from_env(),
+            # Email the admin when a new anomaly opens. Opt-in: this is None (no-op)
+            # unless ALERT_EMAIL_ENABLED + SMTP settings are configured, so the
+            # default/test/CI behaviour is unchanged (no SMTP, no network).
+            notifier=EmailNotifier.from_env(),
+        )
     )
     app.state.last_detection = None  # rollup of the most recent /score, for /status
 

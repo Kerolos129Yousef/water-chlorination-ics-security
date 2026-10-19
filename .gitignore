@@ -35,3 +35,6 @@ crash.*.log
 *.pem
 # NOTE: .terraform.lock.hcl is intentionally NOT ignored — it is committed so
 # provider versions are reproducible across machines and CI.
+
+# Local demo virtualenv (never tracked)
+.venv-demo/
