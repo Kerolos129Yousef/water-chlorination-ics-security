@@ -350,9 +350,13 @@ lifecycle.
 
 ## 9. What Is Left After the MVP
 
-**Currently only empty scaffold directories exist for infra:** `docker/`,
-`infrastructure/terraform/`, `infrastructure/kubernetes/`, `.github/workflows/` are **empty**
-(nothing tracked). So Docker/Terraform/K8s/CI are 🟡 PLANNED, not implemented.
+**Infra is now implemented (updated 2026-10-19):** `docker/` (Phase 8A),
+`.github/workflows/ci.yml` (Phase 9 CI/CD + DevSecOps gates, plus a Phase 10
+approval-gated OIDC deploy job), and `infrastructure/terraform/`
+(`bootstrap` + `network`/`compute`/`cicd` modules, Phase 10) are all built and
+tracked. Only `infrastructure/kubernetes/` remains empty (K8s is a deferred
+stretch goal). The original "empty scaffold" framing below is **superseded** —
+see the status flips in the tables that follow.
 
 ### A. Must-have before final submission
 | Item | Status | Why |
@@ -367,10 +371,11 @@ lifecycle.
 ### B. High-value improvements
 | Item | Status | Why |
 |---|---|---|
-| **AWS deployment** | 🟡 | Proposal calls for cloud; strong demo value |
-| **Terraform (IaC)** | 🟡 empty dir | Reproducible, reviewable infra |
+| **AWS deployment** | ✅ (Phase 10) | Terraform EC2, validated live in `eu-central-1`; torn down between demos for cost |
+| **Terraform (IaC)** | ✅ (Phase 10) | `bootstrap` + `network`/`compute`/`cicd` modules under `infrastructure/terraform/` |
+| **Continuous deployment** | ✅ (Phase 10) | Approval-gated `deploy` job: GitHub OIDC → SSM `deploy.sh`, pins commit-SHA images, no stored AWS keys |
 | **Authentication** on API/dashboard | 🟡 | Operator tooling should not be open |
-| **Notifications** (email/Slack/webhook on alert) | 🟡 | Completes the alerting story |
+| **Notifications** (email/Slack/webhook on alert) | ✅ email / 🟡 rest | Opt-in `EmailNotifier` on new incident shipped; Slack/webhook still open |
 | **Observability/logging** (structured logs, metrics) | partial 🟢 (Python logging exists) | Production readiness |
 | **Threshold recalibration experiment** (sibling artifact) | 🔵 DEFERRED | Could restore ~1% FPR; needs approval, never overwrites |
 | **Performance/latency testing** | ⚪ | Quantify throughput; validate the 150 s floor claim |

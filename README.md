@@ -4,7 +4,7 @@
 
 **Platform for Protecting Water Chlorination Systems from Cyber Attacks** — an end-to-end, local OT/ICS security monitoring MVP that productionizes a TranAD process-aware anomaly detector for the SWaT water-treatment dataset.
 
-> **Status:** Graduation project. Local MVP working end-to-end, containerized (**Phase 8B — complete**), with a **CI/CD + DevSecOps security pipeline (Phase 9 — complete)**: GitHub Actions runs six gates on every PR/`main` push — lint, tests (incl. a real PostgreSQL 16 service), SAST (Bandit), dependency audit (pip-audit), secret scan (Gitleaks), and a real Docker build + image scan (Trivy). Cloud deployment and multi-instance coordination remain **planned**. See [MVP Status](#8-mvp-status), [CI/CD](#131-cicd--devsecops-phase-9), and [Roadmap](#14-project-roadmap).
+> **Status:** Graduation project. Local MVP working end-to-end, containerized (**Phase 8B — complete**), with a **CI/CD + DevSecOps security pipeline (Phase 9 — complete)**: GitHub Actions runs six gates on every PR/`main` push — lint, tests (incl. a real PostgreSQL 16 service), SAST (Bandit), dependency audit (pip-audit), secret scan (Gitleaks), and a real Docker build + image scan (Trivy). **Cloud deployment is implemented (Phase 10 — complete)**: Terraform-provisioned EC2 with an approval-gated, GitHub-OIDC continuous-deployment stage to the instance over SSM (validated live in `eu-central-1`; torn down between demos for cost). Multi-instance coordination remains **planned**. See [MVP Status](#8-mvp-status), [CI/CD](#131-cicd--devsecops-phase-9), [AWS deployment](#132-aws-deployment--cd-phase-10), and [Roadmap](#14-project-roadmap).
 
 ---
 
@@ -36,6 +36,7 @@ Currently implemented and tested:
 - **Per-feature attribution** — each score carries a 45-length per-feature reconstruction error (top contributing sensors).
 - **Thin, stateless FastAPI backend** — validate → delegate → shape; no per-request/streaming state (`backend/`).
 - **Alert engine** — deduplication and `OPEN → CLOSED` lifecycle; a continuous anomaly is one alert (`alerting/`).
+- **Opt-in email alerting** — one email per newly opened incident, best-effort on a background thread, off the `/score` path; disabled unless configured (`alerting/notifier.py`, `ALERT_EMAIL_*`).
 - **Monitoring API** — read-only `/status`, `/alerts`, `/alerts/active` over the in-memory alert state.
 - **Operator dashboard** — zero-build, vanilla HTML/JS, polls the API only (`frontend/index.html`).
 - **End-to-end demo** — normal / attack / recovery flow over a real HTTP boundary (`scripts/run_e2e_demo.py`).
@@ -44,7 +45,7 @@ Currently implemented and tested:
 - **PostgreSQL mode (Phase 8B)** — `docker-compose.postgres.yml` overlay adds a PostgreSQL service (persistent volume, healthcheck, env-only credentials); the backend selects it with `ALERT_STORAGE_BACKEND=postgres`.
 - **411 automated tests** passing (`pytest`), including a real-PostgreSQL integration suite.
 
-> A **CI/CD + DevSecOps pipeline is implemented** (Phase 9): GitHub Actions with lint, tests, SAST, dependency/secret/container scanning — see [CI/CD](#131-cicd--devsecops-phase-9). AWS, Terraform, Kubernetes, authentication, TLS to the database, and distributed multi-instance coordination remain **not implemented** in the current repository. They are tracked in the [roadmap](#14-project-roadmap).
+> A **CI/CD + DevSecOps pipeline is implemented** (Phase 9): GitHub Actions with lint, tests, SAST, dependency/secret/container scanning — see [CI/CD](#131-cicd--devsecops-phase-9). **AWS deployment is also implemented** (Phase 10): Terraform-provisioned EC2 and an approval-gated, GitHub-OIDC CD stage that auto-deploys to the instance over SSM — see [AWS deployment](#132-aws-deployment--cd-phase-10). Kubernetes, authentication, TLS to the database, and distributed multi-instance coordination remain **not implemented** in the current repository. They are tracked in the [roadmap](#14-project-roadmap).
 
 ---
 
@@ -155,10 +156,11 @@ The project uses the **SWaT (Secure Water Treatment)** dataset from iTrust — a
 - Overlapping anomalous windows are **deduplicated** into that same alert — a continuous anomaly is **one** incident, not one alert per window.
 - On return to normal the alert **closes** (`OPEN → CLOSED`) and moves to history.
 - Attribution (top contributing features) is **reused verbatim** from the detector, never recomputed.
+- **Email notification (opt-in)** — when a *new* incident opens, the backend can send one email to the admin (`alerting/notifier.py`, `EmailNotifier`). It fires **once per deduplicated incident** (not per window), **after** the alert is durably persisted, and runs best-effort on a background daemon thread so a flaky SMTP server can never stall `/score` or break the alert lifecycle. It is **off unless** `ALERT_EMAIL_ENABLED` is truthy and the SMTP settings are present (see [`.env.example`](.env.example)), so default/test/CI behaviour is unchanged. Optional `ALERT_EMAIL_MIN_SEVERITY` (LOW/MEDIUM/HIGH) throttles by the severity heuristic below.
 
 > **Severity is an engineering heuristic** based on the `score / threshold` ratio. It is **NOT an ML model output** — the model emits one score and one threshold, with no validated multi-level severity mapping.
 
-> **Alert state is currently in-memory only and is lost when the backend process restarts.** There is no database in this phase.
+> **Alert state is durable when a persistent backend is configured** (SQLite — Phase 7, or PostgreSQL — Phase 8B); the in-memory store (default for un-configured callers) is lost when the backend process restarts. See [Alert persistence](#2-key-features).
 
 ---
 
@@ -187,7 +189,7 @@ Metrics are re-runnable via `scripts/measure_detection_metrics.py`, not hand-tra
 
 ## 8. MVP Status
 
-**Current phase: Phase 9 — COMPLETE.** The local MVP works end-to-end, is containerized, and is guarded by an automated CI/CD security pipeline.
+**Current phase: Phase 10 — COMPLETE.** The local MVP works end-to-end, is containerized, is guarded by an automated CI/CD security pipeline, and has an implemented-and-validated AWS deployment (Terraform + GitHub-OIDC continuous deployment to EC2).
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -204,6 +206,11 @@ Metrics are re-runnable via `scripts/measure_detection_metrics.py`, not hand-tra
 | Phase 8A | Docker containerization (backend + dashboard, `docker compose`) | ✅ Complete |
 | Phase 8B | PostgreSQL alert-store backend + compose overlay | ✅ Complete |
 | Phase 9 | CI/CD + DevSecOps security gates (GitHub Actions) | ✅ Complete |
+| Phase 10A | AWS architecture + Terraform IaC (network / compute / cicd modules, `infrastructure/terraform/`) | ✅ Complete |
+| Phase 10B | EC2 deployment — `terraform apply` + SSM-driven container rollout; validated live in `eu-central-1` | ✅ Complete |
+| Phase 10C | Continuous deployment — approval-gated `deploy` job: GitHub OIDC → SSM `deploy.sh` on push to `main` | ✅ Complete |
+
+> **Phase 10 note.** The deployment is implemented and has been validated live end-to-end in AWS (`eu-central-1`). The running infrastructure is **torn down between demos to avoid cost** (`terraform destroy`; recurring cost then ~\$0; the S3 Terraform-state bucket is retained). It is redeployable via the runbook; once the instance is up, pushes to `main` auto-deploy after the required-reviewer approval gate. See [AWS deployment](#132-aws-deployment--cd-phase-10).
 
 Verified in the repository (as documented in `PROJECT_CONTEXT.md` and the project briefing):
 
@@ -438,6 +445,35 @@ SHAs, ephemeral CI-only PostgreSQL credentials, and no dataset/secret ever
 committed or uploaded. Full design, fail-policy, and justified exceptions:
 [`docs/provenance/phase9_devsecops.md`](docs/provenance/phase9_devsecops.md).
 
+### 13.2 AWS deployment + CD (Phase 10)
+
+Infrastructure is **Terraform** (`infrastructure/terraform/`): a `bootstrap`
+stack (S3 remote-state bucket, versioned/encrypted) plus `network`, `compute`,
+and `cicd` modules composed by `environments/dev`. A `terraform apply` stands up
+an encrypted, IMDSv2-only EC2 instance (a dedicated encrypted EBS **data
+volume** at `/data` survives instance replacement), a VPC/SG exposing **only
+TCP 80** to the dashboard, SSM-core IAM (no SSH), and the OIDC deploy role.
+nginx is the single public entry point and reverse-proxies `/api/` to the
+backend over the private Docker network; port 8000 is never published.
+
+**Continuous deployment** runs in the same workflow after all gates pass and
+images are published. On push to `main`, an approval-gated `deploy` job
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+
+| Step | Detail |
+|---|---|
+| Approval gate | `environment: production` — a required reviewer must approve each deploy |
+| AWS auth | **GitHub OIDC** (`id-token: write`) assumes a least-privilege role — **no long-lived AWS keys** stored; `aws-actions/configure-aws-credentials` pinned to a commit SHA |
+| Target | Resolves the running instance by tag (`Project=ics-guardian`, `Environment=dev`) |
+| Rollout | `ssm:SendCommand` runs `deploy/deploy.sh` with `ICS_IMAGE_TAG=$GITHUB_SHA` (pins the exact scanned commit-SHA images, never `:latest`), polls to completion, fails on any non-`Success` status |
+
+The OIDC role (`modules/cicd`) is scoped to `ec2:DescribeInstances`, tag-scoped
+`ssm:SendCommand` on `AWS-RunShellScript`, and invocation reads only; its trust
+is pinned to this repository's `production` environment. The `alerting` package
+keeps its boundary throughout (no `torch`/FastAPI/`ml.src` imports). Full
+runbook (apply / deploy / rollback / teardown):
+[`docs/provenance/phase10b_ec2_deployment.md`](docs/provenance/phase10b_ec2_deployment.md).
+
 ---
 
 ## 14. Project Roadmap
@@ -456,12 +492,13 @@ TranAD inference library, SWaT replay + rolling window, thin FastAPI backend, en
 | ~~Dependency scanning~~ | ✅ Implemented (Phase 9) — pip-audit gate |
 | ~~Container scanning~~ | ✅ Implemented (Phase 9) — Trivy image scan |
 | Secret scanning | ✅ Implemented (Phase 9) — Gitleaks (full-history) gate |
-| Registry publishing | Push scanned images to a registry (deferred deployment phase) |
-| AWS | Cloud deployment |
-| Terraform | Infrastructure-as-code |
+| Registry publishing | ✅ Implemented (Phase 10) — CI publishes the scanned commit-SHA images to Docker Hub on push to `main` |
+| ~~AWS~~ | ✅ Implemented (Phase 10) — Terraform-provisioned EC2, validated live (`eu-central-1`); torn down between demos for cost |
+| ~~Terraform~~ | ✅ Implemented (Phase 10) — `bootstrap` + `network`/`compute`/`cicd` modules (`infrastructure/terraform/`) |
+| ~~Continuous deployment~~ | ✅ Implemented (Phase 10) — approval-gated `deploy` job: GitHub OIDC → SSM, pins commit-SHA images |
+| ~~Notifications~~ | ✅ Implemented — opt-in email on new incident (`EmailNotifier`); Slack/webhook still open |
 | **Kubernetes** | **Stretch / future** per current project decision |
 | Authentication | API/dashboard auth |
-| Notifications | Alert delivery (email/webhook/etc.) |
 | Observability | Metrics/logging/tracing |
 | Performance testing | Final load/latency validation |
 | Final documentation / demo | Runbook, architecture docs, presentation |
@@ -477,9 +514,8 @@ These are current, documented characteristics — not bugs unless noted:
 - **~150-second context fill.** The model needs a full 30-sample window (≈150 s) before it can score; that is also the detection-latency floor.
 - **~3% false-positive rate** under the current point-wise evaluation, driven by the documented threshold-calibration caveat (6 of 45 features frozen on the calibration split). Surfaced honestly; not silently corrected.
 - **Persistence: in-memory / SQLite / PostgreSQL.** Alerts survive a restart via `SQLiteAlertStore` (single-writer, local file/volume) or `PostgreSQLAlertStore` (networked server, Phase 8B); the in-memory store remains the default for un-configured callers. PostgreSQL makes storage server-grade, but **distributed multi-instance `AlertEngine` coordination is not implemented** — a single engine process is assumed. No TLS to the database / no cloud secret manager yet (credentials via env/`.env`).
-- **No authentication** on the API or dashboard yet.
-- **Local containers only.** Docker/`docker compose` deployment exists (Phase 8A, SQLite and PostgreSQL modes); no cloud deployment yet (no AWS/Terraform/Kubernetes).
-- **No CI/CD security gates** yet.
+- **No authentication** on the API or dashboard yet. The deployed instance exposes plain HTTP on port 80 with no auth/TLS, so it is used with **synthetic, non-sensitive data only** (worldwide HTTP exposure was a formally approved demo decision).
+- **Cloud deploy is single-instance and ephemeral.** AWS deployment exists (Phase 10 — Terraform EC2 + GitHub-OIDC CD), but it is a single instance stood up for demos and **torn down afterwards for cost**; Kubernetes / multi-instance remains out of scope.
 - **Demo auto-selection caveat.** In attack mode without `--attack-segment`, the auto-selection probing scores windows through the live endpoint and can perturb in-memory alert state — pass an explicit segment for a clean manual demo (see [§10](#10-running-the-end-to-end-demo)).
 
 ---
